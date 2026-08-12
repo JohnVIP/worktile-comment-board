@@ -11,6 +11,7 @@ Worktile 任务评论区看板 —— Flask 后端
 import os
 import json
 import time
+import hashlib
 import secrets
 import threading
 from pathlib import Path
@@ -18,10 +19,14 @@ from pathlib import Path
 from flask import (
     Flask, request, jsonify, render_template, abort, Response, make_response,
 )
+from werkzeug.middleware.proxy_fix import ProxyFix
 from cryptography.fernet import Fernet
 from wt_client import WorktileClient
 
 app = Flask(__name__)
+# 部署在反向代理 / 负载均衡后时，让 request.is_secure / remote_addr 识别真实情况，
+# 这是正确设置 Secure cookie 与防御的基础。
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 
 BASE_DIR = Path(__file__).resolve().parent
 SECRET_FILE = BASE_DIR / ".secret"          # 会话加密密钥（仅本机可读）
@@ -145,12 +150,57 @@ def _persist_load():
 _persist_load()
 
 
+def _mask_client_id(cid):
+    """把 client_id 局部打码，用于前端展示「当前租户」，既让本人可辨认，
+    又不泄露完整凭证标识。"""
+    if not cid:
+        return "未知"
+    if len(cid) <= 8:
+        return cid[:2] + "****"
+    return cid[:4] + "****" + cid[-4:]
+
+
+def _tenant_fingerprint(cid):
+    """client_id 的稳定哈希（前 12 位 hex）。
+
+    同一租户（相同凭证）指纹恒定；不同租户指纹不同。用作「隔离证明」：
+    前端展示给本人，使其一眼确认自己处于独立的租户空间，不会混入他人数据。
+    """
+    return hashlib.sha256((cid or "").encode()).hexdigest()[:12]
+
+
+def _session_lock(s):
+    """取该会话专属锁（惰性创建），用于串行化同一会话内的懒初始化，
+    避免 gunicorn 多线程下并发触发 client/projects/member_map 重建的竞态。"""
+    return s.setdefault("_lock", threading.Lock())
+
+
+def _cookie_secure():
+    """仅在经 HTTPS 反向代理访问时才给 cookie 打 Secure 标记，
+    本地 http 调试不受影响。"""
+    return request.headers.get("X-Forwarded-Proto", "").lower() == "https" or request.is_secure
+
+
 def _get_session():
-    """从 cookie 取会话，不存在/过期返回 None；client/projects 懒重建。"""
+    """从 cookie 取会话，不存在/过期返回 None；client/projects 懒重建。
+
+    多租户隔离模型：
+    - 每个浏览器持有随机 sid cookie，SESSIONS[sid] 保存该租户自己的凭证与
+      WorktileClient 实例（token / projects / member_map / file_cache 全部实例级）。
+    - 一个租户拿不到别人的 sid，自然访问不到别人的数据；所有 API 都经此函数鉴权。
+    - 多 worker 部署时，若本进程内存没有该 sid（请求被分发到另一个 worker），
+      则从加密的 sessions.json 恢复凭证、由 _refresh_client 懒重建 client，
+      保证租户不会因 worker 切换而随机 401。
+    """
     sid = request.cookies.get(SID_COOKIE)
     if not sid:
         return None
     s = SESSIONS.get(sid)
+    if not s:
+        # 多 worker 场景：本 worker 内存里没有该会话，尝试从磁盘恢复
+        # （盘上只存凭证，不含 token；token 由 _refresh_client 懒重建）
+        _persist_load()
+        s = SESSIONS.get(sid)
     if not s:
         return None
     if time.time() - s.get("created_at", 0) > SESSION_TIMEOUT:
@@ -158,7 +208,8 @@ def _get_session():
             SESSIONS.pop(sid, None)
             _persist_save()
         return None
-    return _refresh_client(s)
+    with _session_lock(s):
+        return _refresh_client(s)
 
 
 def _require_session():
@@ -228,9 +279,11 @@ def login():
         "projects_count": len(projects),
         "warning": login_warning,
         "tenant_host": tenant_host,
+        "client_id_masked": _mask_client_id(client_id),
+        "tenant_fingerprint": _tenant_fingerprint(client_id),
     })
     resp.set_cookie(SID_COOKIE, sid, httponly=True, samesite="Lax",
-                    max_age=SESSION_TIMEOUT)
+                    secure=_cookie_secure(), max_age=SESSION_TIMEOUT)
     return resp
 
 
@@ -242,16 +295,22 @@ def logout():
             SESSIONS.pop(sid, None)
             _persist_save()
     resp = jsonify({"ok": True})
-    resp.delete_cookie(SID_COOKIE)
+    resp.delete_cookie(SID_COOKIE, secure=_cookie_secure())
     return resp
 
 
 @app.route("/api/me", methods=["GET"])
 def me():
-    """供前端启动探测登录态：已登录返回 ok，否则 401。"""
+    """供前端启动探测登录态：已登录返回 ok，否则 401。
+
+    同时回传租户隔离标识（打码 client_id + 指纹），前端据此在顶栏展示，
+    让本人确认自己处于独立的租户空间。
+    """
     s = _require_session()
     return jsonify({"ok": True, "projects_count": len(s["projects"] or []),
-                    "tenant_host": s.get("tenant_host", DEFAULT_TENANT_HOST)})
+                    "tenant_host": s.get("tenant_host", DEFAULT_TENANT_HOST),
+                    "client_id_masked": _mask_client_id(s["client_id"]),
+                    "tenant_fingerprint": _tenant_fingerprint(s["client_id"])})
 
 
 @app.route("/api/projects", methods=["GET"])
@@ -266,12 +325,13 @@ def projects():
 
 
 def _ensure_member_map(s):
-    if s["member_map"] is None:
-        try:
-            s["member_map"] = s["client"].get_member_map()
-        except RuntimeError:
-            s["member_map"] = {}
-    return s["member_map"]
+    with _session_lock(s):
+        if s["member_map"] is None:
+            try:
+                s["member_map"] = s["client"].get_member_map()
+            except RuntimeError:
+                s["member_map"] = {}
+        return s["member_map"]
 
 
 @app.route("/api/task_titles", methods=["GET"])

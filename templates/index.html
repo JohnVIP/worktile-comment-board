@@ -61,6 +61,15 @@
   .topbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
     margin-bottom: 16px; }
   .topbar h2 { font-size: 18px; margin: 0; flex: 1; }
+  .tenant-badge {
+    font-size: 13px; padding: 5px 12px; border-radius: 999px;
+    background: var(--panel, #f1f3f5); color: var(--muted, #888);
+    border: 1px solid var(--border, #e3e6ea); white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .tenant-badge.active {
+    background: #e7f0ff; color: #1a66d6; border-color: #bcd6ff;
+  }
   .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
     margin-bottom: 16px; }
   .toolbar .group { display: flex; align-items: center; gap: 6px; }
@@ -441,6 +450,7 @@
   <div id="boardView" class="hidden">
     <div class="topbar">
       <h2>任务评论区看板</h2>
+      <span class="tenant-badge" id="tenantBadge" title="你正在查看自己租户的数据，与其他租户完全隔离">租户：—</span>
       <button class="btn-ghost" onclick="doLogout()">退出登录</button>
     </div>
 
@@ -491,6 +501,8 @@ const state = {
   projectName: "全部项目",
   projects: [],       // 项目列表缓存（来自 /api/projects）
   tenantHost: "techwll.worktile.com",  // 任务详情页跳转用的租户域名（来自 /api/me 或登录响应）
+  clientIdMasked: "",    // 当前租户打码后的 client_id（隔离标识，来自 /api/me 或登录响应）
+  tenantFingerprint: "", // 当前租户指纹（隔离证明，同一租户恒定、不同租户不同）
   // 任务名称搜索：typeahead + 多选 chip + OR 查询
   titleChips: [],         // 已选 chip 列表（每项 {task_id, identifier, title, project_name}）
   titleDraft: "",         // 输入框当前草稿（未选中前）
@@ -547,6 +559,9 @@ async function doLogin(){
       })
     });
     if (r.tenant_host) state.tenantHost = r.tenant_host;
+    if (r.client_id_masked) state.clientIdMasked = r.client_id_masked;
+    if (r.tenant_fingerprint) state.tenantFingerprint = r.tenant_fingerprint;
+    renderTenantBadge();
     hide("loginView"); show("boardView");
     await loadProjects();
   } catch(e){
@@ -560,14 +575,30 @@ async function doLogin(){
 async function doLogout(){
   try { await api("/api/logout", {method:"POST"}); } catch(e){}
   state.expanded.clear(); state.commentsCache = {};
+  state.clientIdMasked = ""; state.tenantFingerprint = "";
+  renderTenantBadge();
   hide("boardView"); show("loginView");
   document.getElementById("clientSecret").value = "";
 }
 
+/** 顶栏租户徽标：展示当前租户打码 client_id 与指纹，让用户直观确认
+ *  自己处于隔离的租户空间（与其他租户数据互不可见）。 */
+function renderTenantBadge(){
+  const el = document.getElementById("tenantBadge");
+  if (!el) return;
+  if (state.clientIdMasked){
+    const fp = state.tenantFingerprint ? ` · #${state.tenantFingerprint}` : "";
+    el.textContent = `租户：${state.clientIdMasked}${fp}`;
+    el.classList.add("active");
+  } else {
+    el.textContent = "租户：—";
+    el.classList.remove("active");
+  }
+}
+
 async function loadProjects(){
   const data = await api("/api/projects");
-  state.projects = data.projects || [];
-  renderProjectMenu("");
+  state.projects = data.projects || [];  renderProjectMenu("");
   if (data.projects && data.projects.length){
     selectProject("__all__", "全部项目");
   } else if (data.error){
@@ -1104,6 +1135,9 @@ async function bootstrap(){
   try {
     const me = await api("/api/me");      // 401 会自动跳回登录页并抛错
     if (me.tenant_host) state.tenantHost = me.tenant_host;
+    if (me.client_id_masked) state.clientIdMasked = me.client_id_masked;
+    if (me.tenant_fingerprint) state.tenantFingerprint = me.tenant_fingerprint;
+    renderTenantBadge();
     hide("loginView"); show("boardView");
     await loadProjects();
   } catch(e){
