@@ -12,6 +12,7 @@ Worktile OpenAPI 客户端（团队鉴权 Tenant 模式）
 
 import json as _json
 import mimetypes
+import re
 import requests
 import time
 from datetime import datetime
@@ -775,6 +776,41 @@ def _ext(name):
     return "." + name.rsplit(".", 1)[-1].lower()
 
 
+# Worktile 评论里把 @mention 序列化成纯文本时的内联语法：
+#   [@<uid>|<display_name>]  或  [@<uid>]
+# uid 一般是 24 位十六进制的 MongoDB ObjectId；display_name 可能是姓名/昵称，
+# 也可能在某些旧评论里是空（只剩 [@uid]）。这种格式是真实数据里观察到的，
+# 不是 JSON 富文本树，必须在 JSON 解析前先替换，否则整段被当成纯文本返回。
+_INLINE_MENTION_RE = re.compile(
+    r"\[@([A-Za-z0-9_\-]+)(?:\|([^\]]*))?\]"
+)
+
+
+def _normalize_inline_mentions(text, member_map=None):
+    """把 [@uid|name] / [@uid] 内联语法还原成 @<真实姓名>。
+
+    优先用括号里的 name（一般是作者写下时填的，可能已是姓名）。
+    若括号里的 name 缺失或等于 uid，再用 member_map 回查。
+    """
+    if not text:
+        return text
+
+    def _sub(m):
+        uid = m.group(1)
+        name = (m.group(2) or "").strip()
+        # 去掉 [uid|uid] 这种前后相同的退化情况
+        if name == uid:
+            name = ""
+        if not name and member_map:
+            name = member_map.get(uid, "") or ""
+        if not name:
+            # 最后兜底：保留 uid 前 8 位，让人能区分但不至于被整段污染
+            name = uid[:8]
+        return "@" + name
+
+    return _INLINE_MENTION_RE.sub(_sub, text)
+
+
 def rich_text_to_plain(content, member_map=None):
     """
     把 Worktile 评论的富文本 schema（类 ProseMirror 的 JSON 树）转成纯文本。
@@ -784,6 +820,8 @@ def rich_text_to_plain(content, member_map=None):
       解析失败则原样返回。
     - 已经是 list / dict：直接递归展开。
     - None / 其他：原样转 str 返回。
+    - **内联 mention 语法**：若字符串里含 [@uid|name]，先把它还原成 @姓名，
+      否则整段会被当纯文本字面量输出。
 
     参数:
         content: 评论内容（str / list / dict / None）
@@ -797,9 +835,11 @@ def rich_text_to_plain(content, member_map=None):
             try:
                 content = _json.loads(s)
             except (ValueError, TypeError):
-                return s
+                # 不是合法 JSON —— 可能是含 [@uid|name] 的纯文本评论，
+                # 走内联 mention 还原后返回
+                return _normalize_inline_mentions(s, member_map).strip()
         else:
-            return s
+            return _normalize_inline_mentions(s, member_map).strip()
     if isinstance(content, (list, dict)):
         return _rt_walk(content, member_map).strip()
     return str(content)
@@ -857,7 +897,16 @@ def _rt_walk(node, member_map=None):
         return _resolve_emoji_shortcode(code)
 
     if ntype == "link":
-        return node.get("text", "") or node.get("href", "") or ""
+        # Worktile 实际 schema：{"type":"link","url":"...","children":[{"text":"..."}]}
+        # 也兼容 {"text":"...","href":"..."} 这种
+        direct = (node.get("text") or node.get("url")
+                  or node.get("href") or "")
+        if direct:
+            return direct
+        for ch in (node.get("children") or []):
+            if isinstance(ch, dict) and isinstance(ch.get("text"), str) and ch.get("text"):
+                return ch["text"]
+        return ""
 
     if ntype in ("hard_break", "br"):
         return "\n"
