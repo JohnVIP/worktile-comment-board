@@ -148,6 +148,11 @@
     font-weight: 500; font-size: 12px;
     color: #475569;
   }
+  /* 任务名称：可点击跳转 Worktile 任务详情页（新标签页） */
+  td.cell-title a {
+    color: var(--accent); text-decoration: none; font-weight: 600;
+  }
+  td.cell-title a:hover { text-decoration: underline; }
   .muted { color: var(--muted); }
 
   /* 任务行内的评论列：紧凑堆叠多条评论 */
@@ -313,6 +318,11 @@
         <span>Client Secret</span>
         <input type="password" id="clientSecret" placeholder="请输入 Client Secret" autocomplete="off">
       </label>
+      <label class="field">
+        <span>Worktile 域名（用于跳转任务详情页）</span>
+        <input type="text" id="tenantInput" value="techwll.worktile.com"
+               placeholder="如 techwll.worktile.com" autocomplete="off" spellcheck="false">
+      </label>
       <button id="loginBtn" style="width:100%" onclick="doLogin()">进入看板</button>
     </div>
   </div>
@@ -357,6 +367,7 @@ const state = {
   projectId: "__all__",
   projectName: "全部项目",
   projects: [],       // 项目列表缓存（来自 /api/projects）
+  tenantHost: "techwll.worktile.com",  // 任务详情页跳转用的租户域名（来自 /api/me 或登录响应）
   page: 0,
   pageSize: 50,
   total: null,
@@ -399,8 +410,13 @@ async function doLogin(){
     const r = await api("/api/login", {
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({client_id: clientId, client_secret: clientSecret})
+      body: JSON.stringify({
+        client_id: clientId,
+        client_secret: clientSecret,
+        tenant: document.getElementById("tenantInput").value.trim()
+      })
     });
+    if (r.tenant_host) state.tenantHost = r.tenant_host;
     hide("loginView"); show("boardView");
     await loadProjects();
   } catch(e){
@@ -606,6 +622,27 @@ function escapeHtml(s){
     "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
 }
 
+/**
+ * 拼接 Worktile 任务详情页 URL。
+ * 规则（已用真实 URL 验证）：https://{tenant}/mission/projects/{project_id}/tasks/{task_id}
+ * 缺少租户域名或 project_id/task_id 时返回 null（调用方降级为纯文本）。
+ */
+function buildTaskUrl(t){
+  if (!state.tenantHost || !t.project_id || !t.task_id) return null;
+  return "https://" + state.tenantHost
+    + "/mission/projects/" + encodeURIComponent(t.project_id)
+    + "/tasks/" + encodeURIComponent(t.task_id);
+}
+
+/** 任务名称渲染：可点击 → 新标签页打开 Worktile 任务详情；缺字段时降级为纯文本。 */
+function buildTaskTitle(t){
+  const url = buildTaskUrl(t);
+  const title = escapeHtml(t.title);
+  if (!url) return title;
+  return `<a href="${url}" target="_blank" rel="noopener" `
+    + `title="在新标签页打开 Worktile 任务详情">${title}</a>`;
+}
+
 function renderTable(items){
   const area = document.getElementById("tableArea");
   if (!items.length){
@@ -667,7 +704,7 @@ function renderTable(items){
           + '</td>';
       }
       html += `<td class="cell-id">${escapeHtml(t.identifier || "-")}</td>`
-        + `<td class="cell-title">${escapeHtml(t.title)}</td>`
+        + `<td class="cell-title">${buildTaskTitle(t)}</td>`
         + `<td>${escapeHtml(t.assignee)}</td>`
         + `<td>${escapeHtml(t.updated_at_str)}</td>`
         + `<td class="cell-comments" data-comments="${escapeHtml(t.task_id)}">${commentsHtml}</td>`
@@ -872,7 +909,8 @@ document.addEventListener("keydown", e => {
 // 页面加载：若已有有效会话则自动进入看板，否则显示登录页（解决每次都要输入凭证）
 async function bootstrap(){
   try {
-    await api("/api/me");      // 401 会自动跳回登录页并抛错
+    const me = await api("/api/me");      // 401 会自动跳回登录页并抛错
+    if (me.tenant_host) state.tenantHost = me.tenant_host;
     hide("loginView"); show("boardView");
     await loadProjects();
   } catch(e){

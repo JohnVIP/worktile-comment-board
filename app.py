@@ -46,6 +46,9 @@ SESSIONS = {}
 _SESS_LOCK = threading.Lock()
 
 DEFAULT_BASE_URL = "https://dev.worktile.com"
+# 任务详情页跳转用的租户域名（登录页可改；用于拼接
+# https://{tenant}/mission/projects/{project_id}/tasks/{task_id}）
+DEFAULT_TENANT_HOST = "techwll.worktile.com"
 SID_COOKIE = "wt_sid"
 PAGE_SIZE_OPTIONS = [20, 50, 100, 200]
 
@@ -72,6 +75,7 @@ def _persist_save():
             "client_id": s["client_id"],
             "client_secret": s["client_secret"],
             "base_url": s["base_url"],
+            "tenant_host": s.get("tenant_host", DEFAULT_TENANT_HOST),
             "created_at": s.get("created_at", time.time()),
         }
     try:
@@ -80,6 +84,24 @@ def _persist_save():
         os.chmod(SESSIONS_FILE, 0o600)
     except Exception:
         pass
+
+
+def _normalize_tenant(tenant):
+    """把用户输入的租户域名规整成纯 host：去掉协议、路径、查询、末尾斜杠。
+
+    登录页要求用户填的是「你的 Worktile 域名」，习惯上可能填
+    `https://techwll.worktile.com/`、`techwll.worktile.com/#/...` 等形态，
+    这里统一裁剪成 `techwll.worktile.com`，便于拼接任务详情页 URL。
+    """
+    t = (tenant or "").strip()
+    if not t:
+        return DEFAULT_TENANT_HOST
+    t = t.replace("https://", "").replace("http://", "")
+    # 依次按 / ? # 截断，取最前面的 host 部分
+    for sep in ("/", "?", "#"):
+        t = t.split(sep, 1)[0]
+    t = t.strip().rstrip("/")
+    return t or DEFAULT_TENANT_HOST
 
 
 def _persist_load():
@@ -97,6 +119,7 @@ def _persist_load():
                 "client_id": c["client_id"],
                 "client_secret": c["client_secret"],
                 "base_url": c.get("base_url", DEFAULT_BASE_URL),
+                "tenant_host": c.get("tenant_host", DEFAULT_TENANT_HOST),
                 "client": None,
                 "projects": None,
                 "member_map": None,
@@ -153,6 +176,7 @@ def login():
     client_id = (data.get("client_id") or "").strip()
     client_secret = (data.get("client_secret") or "").strip()
     base_url = (data.get("base_url") or DEFAULT_BASE_URL).strip()
+    tenant_host = _normalize_tenant(data.get("tenant"))
     if not client_id or not client_secret:
         abort(400, description="Client ID 和 Client Secret 均不能为空")
 
@@ -174,6 +198,7 @@ def login():
             "client_id": client_id,
             "client_secret": client_secret,
             "base_url": base_url,
+            "tenant_host": tenant_host,
             "client": client,
             "projects": projects,
             "projects_error": (None if projects else login_warning),
@@ -185,6 +210,7 @@ def login():
         "ok": True,
         "projects_count": len(projects),
         "warning": login_warning,
+        "tenant_host": tenant_host,
     })
     resp.set_cookie(SID_COOKIE, sid, httponly=True, samesite="Lax",
                     max_age=SESSION_TIMEOUT)
@@ -207,7 +233,8 @@ def logout():
 def me():
     """供前端启动探测登录态：已登录返回 ok，否则 401。"""
     s = _require_session()
-    return jsonify({"ok": True, "projects_count": len(s["projects"] or [])})
+    return jsonify({"ok": True, "projects_count": len(s["projects"] or []),
+                    "tenant_host": s.get("tenant_host", DEFAULT_TENANT_HOST)})
 
 
 @app.route("/api/projects", methods=["GET"])
@@ -217,6 +244,7 @@ def projects():
         "ok": True,
         "projects": s["projects"],
         "error": s.get("projects_error"),
+        "tenant_host": s.get("tenant_host", DEFAULT_TENANT_HOST),
     })
 
 
