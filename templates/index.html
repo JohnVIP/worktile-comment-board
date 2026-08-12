@@ -366,61 +366,48 @@
 
   /* 分页 */
   .pager {
-    display: flex; align-items: center; justify-content: center; gap: 16px;
-    flex-wrap: wrap; margin: 22px auto 12px; padding: 12px 18px;
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 12px; box-shadow: 0 1px 3px rgba(15,23,42,.06);
-    width: fit-content; max-width: 100%;
+    display: flex; align-items: center; justify-content: center;
+    gap: 12px; flex-wrap: wrap; margin-top: 18px; margin-bottom: 8px;
   }
-  .pager-info { font-size: 13px; color: var(--muted); white-space: nowrap; }
-  .pager-info b { color: var(--text); font-weight: 600; }
-  .pg { display: inline-flex; align-items: center; gap: 5px; }
-  .pager button.page-btn {
-    min-width: 34px; height: 34px; padding: 0 10px;
-    display: inline-flex; align-items: center; justify-content: center;
-    border: 1px solid var(--border); background: #fff; color: var(--text);
-    border-radius: 8px; font-size: 13.5px; cursor: pointer;
-    transition: border-color .15s, background .15s, color .15s, box-shadow .15s;
+  .pager .info { color: var(--muted); font-size: 13px; }
+  .pager .pager-btn {
+    padding: 6px 14px; border: 1px solid var(--border);
+    background: #fff; color: var(--text); border-radius: 6px;
+    font-size: 13.5px; cursor: pointer;
+    transition: border-color .15s, background .15s, color .15s;
   }
-  .pager button.page-btn:hover:not(:disabled):not(.active) {
+  .pager .pager-btn:hover:not(:disabled) {
     border-color: var(--accent); color: var(--accent);
     background: var(--accent-soft);
   }
-  .pager button.page-btn.active {
-    background: var(--accent); border-color: var(--accent); color: #fff;
-    font-weight: 600; cursor: default;
-  }
-  .pager button.page-btn:disabled {
-    opacity: .42; cursor: not-allowed; background: #f8fafc;
-  }
-  .pager .page-arrows { font-size: 17px; line-height: 1; padding: 0 9px; }
-  .pager .page-ellipsis {
-    min-width: 20px; text-align: center; color: var(--muted);
-    user-select: none; align-self: flex-end; padding-bottom: 5px;
+  .pager .pager-btn:disabled {
+    opacity: .45; cursor: not-allowed; background: #f8fafc;
   }
   .pager .page-jump {
     display: inline-flex; align-items: center; gap: 6px;
-    font-size: 13px; color: var(--muted); white-space: nowrap;
+    font-size: 13px; color: var(--muted);
   }
-  .pager .page-jump .page-input {
-    width: 52px; height: 34px; padding: 0 8px; text-align: center;
-    border: 1px solid var(--border); border-radius: 8px; font-size: 13.5px;
+  .pager .page-input {
+    width: 56px; padding: 6px 8px; text-align: center;
+    border: 1px solid var(--border); border-radius: 6px; font-size: 13px;
     background: #fff; color: var(--text);
     transition: border-color .15s, box-shadow .15s;
   }
-  .pager .page-jump .page-input:focus {
+  .pager .page-input:focus {
     outline: none; border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-soft);
   }
-  .pager .page-jump .page-input:disabled {
+  .pager .page-input:disabled {
     background: #f1f5f9; color: #94a3b8; cursor: not-allowed;
   }
   .pager .page-go {
-    height: 34px; padding: 0 12px; border: 1px solid var(--border);
-    background: #fff; color: var(--accent); border-radius: 8px;
-    font-size: 13.5px; cursor: pointer; transition: all .15s;
+    padding: 6px 12px; border: 1px solid var(--border);
+    background: #fff; color: var(--accent); border-radius: 6px;
+    font-size: 13px; cursor: pointer; transition: all .15s;
   }
-  .pager .page-go:hover { background: var(--accent-soft); border-color: var(--accent); }
+  .pager .page-go:hover {
+    background: var(--accent-soft); border-color: var(--accent);
+  }
   .hidden { display: none; }
 </style>
 </head>
@@ -1039,87 +1026,54 @@ function renderContent(text){
 
 function renderPager(){
   const pager = document.getElementById("pager");
-  const curr = state.page + 1;          // 1-based 当前页
-  const hasTotal = state.total != null;
-  const maxPage = hasTotal ? Math.max(1, Math.ceil(state.total / state.pageSize)) : null;
+  const curr = state.page + 1;
+  let totalHtml = "";
+  let maxPage = null;
 
-  // 信息区
-  let infoHtml;
-  if (hasTotal){
-    infoHtml = `<span class="pager-info">共 <b>${state.total}</b> 条 · 第 <b>${curr}</b>/<b>${maxPage}</b> 页</span>`;
+  if (state.total != null){
+    maxPage = Math.max(1, Math.ceil(state.total / state.pageSize));
+    totalHtml = `<span class="info">共 ${state.total} 条 · 共 ${maxPage} 页</span>`;
   } else if (state.hasMore){
-    infoHtml = `<span class="pager-info">第 <b>${curr}</b> 页（还有更多）</span>`;
+    totalHtml = `<span class="info">第 ${curr} 页（还有更多）</span>`;
   } else {
-    infoHtml = `<span class="pager-info">第 <b>${curr}</b> 页</span>`;
+    totalHtml = `<span class="info">第 ${curr} 页</span>`;
   }
 
-  const prevDisabled = state.page <= 0 ? "disabled" : "";
-  const nextDisabled = state.hasMore ? "" : "disabled";
-
-  // 页码按钮（仅已知总页时）
-  let pagesHtml = "";
-  if (hasTotal){
-    pagesHtml = buildPageList(curr, maxPage).map(p => {
-      if (p === "...") return `<span class="page-ellipsis">…</span>`;
-      const active = p === curr ? " active" : "";
-      return `<button class="page-btn${active}" ${active ? "disabled" : ""} onclick="gotoExactPage(${p})">${p}</button>`;
-    }).join("");
-  }
-
-  // 跳转区
-  const jumpHtml = hasTotal ? `
-    <span class="page-jump">
-      <span>前往</span>
-      <input id="pageInput" class="page-input" type="number" min="1" max="${maxPage}" value="${curr}"
-             onkeydown="if(event.key==='Enter'){gotoExactPage();}">
-      <span>页</span>
-      <button class="page-go" onclick="gotoExactPage()">跳转</button>
-    </span>` : `
-    <span class="page-jump">
-      <span>前往</span>
-      <input id="pageInput" class="page-input" type="number" min="1" disabled placeholder="-">
-      <span>页</span>
-    </span>`;
+  // 跳转输入框：total 已知时设 max；hasMore 但 total 未知时也放开可输入（不写 max）；
+  // 两边都为否（首屏单页）才置灰。
+  const enableJump = (state.total != null) || state.hasMore;
+  const jumpMaxAttr = (state.total != null) ? `max="${maxPage}"` : "";
+  const jumpHint = (!state.hasMore && state.total == null) ? `placeholder="-"`
+                  : (state.total == null && state.hasMore) ? `placeholder="N"`
+                  : "";
 
   pager.innerHTML = `
-    ${infoHtml}
-    <span class="pg">
-      <button class="page-btn page-arrows" ${prevDisabled} onclick="gotoPage(-1)" title="上一页">‹</button>
-      ${pagesHtml}
-      <button class="page-btn page-arrows" ${nextDisabled} onclick="gotoPage(1)" title="下一页">›</button>
+    <button class="pager-btn" id="prevBtn" ${state.page<=0?'disabled':''} onclick="gotoPage(-1)">上一页</button>
+    ${totalHtml}
+    <span class="page-jump">
+      <span>前往</span>
+      <input id="pageInput" class="page-input" type="number" min="1"
+             ${jumpMaxAttr} value="${curr}" ${jumpHint}
+             ${enableJump ? "" : "disabled"}
+             onkeydown="if(event.key==='Enter'){gotoExactPage();}">
+      <span>页</span>
+      <button class="page-go" onclick="gotoExactPage()" ${enableJump ? "" : "disabled"}>跳转</button>
     </span>
-    ${jumpHtml}
+    <button class="pager-btn" id="nextBtn" ${state.hasMore?'':'disabled'} onclick="gotoPage(1)">下一页</button>
   `;
 }
 
-/** 生成带省略号的页码序列。maxPage 较小时直接全部展开。 */
-function buildPageList(curr, maxPage){
-  if (maxPage <= 7){
-    return Array.from({length: maxPage}, (_, i) => i + 1);
-  }
-  const candidates = new Set([1, maxPage, curr, curr - 1, curr + 1]);
-  const valid = [...candidates].filter(p => p >= 1 && p <= maxPage).sort((a, b) => a - b);
-  const out = [];
-  let prev = 0;
-  for (const p of valid){
-    if (p - prev > 1) out.push("...");
-    out.push(p);
-    prev = p;
-  }
-  return out;
-}
-
-function gotoExactPage(n){
-  if (state.total == null) return;
+function gotoExactPage(){
+  if (state.total == null && !state.hasMore) return;
   const input = document.getElementById("pageInput");
-  if (n == null){            // 来自输入框或「跳转」按钮
-    if (!input) return;
-    n = parseInt(input.value, 10);
+  if (!input) return;
+  let n = parseInt(input.value, 10);
+  if (!Number.isFinite(n) || n < 1) { input.value = state.page + 1; return; }
+  if (state.total != null){
+    const maxPage = Math.max(1, Math.ceil(state.total / state.pageSize));
+    if (n > maxPage) n = maxPage;
   }
-  if (!Number.isFinite(n) || n < 1){ if (input) input.value = state.page + 1; return; }
-  const maxPage = Math.max(1, Math.ceil(state.total / state.pageSize));
-  if (n > maxPage) n = maxPage;
-  if (input) input.value = n;
+  input.value = n;
   const target = n - 1;
   if (target === state.page) return;
   state.page = target;
