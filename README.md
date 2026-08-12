@@ -85,3 +85,61 @@ $PY -m pip install -r requirements.txt
 PORT=5080 gunicorn app:app --bind 0.0.0.0:5080 --workers 1 --threads 4
 ```
 
+### 部署到云主机（腾讯云 / 阿里云轻量应用服务器，推荐用于长期稳定访问）
+
+不依赖你本机开机，用户随时可访问。用 Docker 打包，常驻运行。
+
+新增的部署文件：
+
+- `Dockerfile` —— 基于 `python:3.13-slim`，装依赖后用 `gunicorn` 单 worker 启动
+- `docker-compose.yml` —— `restart: unless-stopped`（崩溃/重启自动拉起），映射 `5080:5080`
+- `.dockerignore` / `.env.example` —— 构建上下文与密钥模板
+- `deploy.sh` —— 云主机上一键：装 Docker → 拉代码 → 生成密钥 → 构建 → 常驻运行
+
+**方式 A：一键脚本（在云主机上执行）**
+
+```bash
+# 已 clone 仓库：
+cd /opt/worktile-comment-board && bash deploy.sh
+
+# 或裸机直接跑（自动 clone）：
+bash <(curl -fsSL https://raw.githubusercontent.com/JohnVIP/worktile-comment-board/main/deploy.sh)
+```
+
+**方式 B：手动**
+
+```bash
+git clone https://github.com/JohnVIP/worktile-comment-board.git /opt/worktile-comment-board
+cd /opt/worktile-comment-board
+cp .env.example .env
+# 编辑 .env，把 FERNET_KEY 换成自己生成的随机串：
+#   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+docker compose build
+docker compose up -d
+```
+
+**关键环境变量**
+
+| 变量 | 说明 |
+| --- | --- |
+| `PORT` | 容器内监听端口，默认 `5080`，一般不用改 |
+| `FERNET_KEY` | 会话文件加密密钥。**必须固定**：变了会让已保存会话解密失败、用户需重登。用 `.env` 或云主机环境变量注入 |
+
+> 密钥加载优先级：环境变量 `FERNET_KEY` → 本地 `.secret` 文件 → 临时随机（仅本次进程）。部署时务必通过 `.env` / 平台 Secrets 固定 `FERNET_KEY`。
+
+**访问与放行**
+
+- 应用跑在 `http://<云主机公网IP>:5080`，把它发给用户即可。
+- ⚠️ 必须在云厂商控制台「安全组 / 防火墙」放行 **TCP 5080** 入站，否则外网连不上。
+- 想要 HTTPS（可选）：在云主机上再跑一个 Caddy / Nginx 反代到 `127.0.0.1:5080`，并把 80/443 也放行。
+
+**日常运维**
+
+```bash
+docker compose ps          # 状态
+docker compose logs -f     # 日志
+docker compose up -d --build   # 代码更新后重建
+docker compose down        # 停止
+```
+
+

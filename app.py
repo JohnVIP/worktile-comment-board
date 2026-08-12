@@ -30,12 +30,25 @@ SESSION_TIMEOUT = 30 * 24 * 3600            # 会话有效期 30 天，到期需
 
 
 def _load_key():
-    """首次运行随机生成密钥并保存在本地；之后复用，用于加解密会话文件。"""
+    """加载会话加密密钥，优先级：
+
+    1. 环境变量 FERNET_KEY（部署到云平台时放在平台的 Secrets/Environment 里，
+       保证密钥固定，重启会话不失效，且不依赖可写的本地磁盘）。
+    2. 本地 .secret 文件（本机开发用，首次运行随机生成并保存）。
+    3. 都没有则临时生成一个（仅本次进程有效，重启即失效；写文件失败也不阻塞启动）。
+    """
+    env_key = os.environ.get("FERNET_KEY")
+    if env_key:
+        return env_key.strip().encode()
     if SECRET_FILE.exists():
         return SECRET_FILE.read_text().strip().encode()
     key = Fernet.generate_key()
-    SECRET_FILE.write_text(key.decode())
-    os.chmod(SECRET_FILE, 0o600)
+    try:
+        SECRET_FILE.write_text(key.decode())
+        os.chmod(SECRET_FILE, 0o600)
+    except Exception:
+        # 云平台临时文件系统可能不可写，忽略：本次进程用临时密钥即可
+        pass
     return key
 
 

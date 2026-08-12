@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    image: worktile-comment-board:latest
+    container_name: worktile-comment-board
+    restart: unless-stopped          # 容器挂掉/云主机重启都自动拉起
+    ports:
+      - "5080:5080"                  # 主机 5080 -> 容器 5080
+    environment:
+      - PORT=5080
+      - FERNET_KEY=${FERNET_KEY}     # 从同目录 .env 读取，务必自己生成并固定
+    # 如需持久化会话（容器重建后不丢登录态），可挂一个卷：
+    # volumes:
+    #   - ./data:/app

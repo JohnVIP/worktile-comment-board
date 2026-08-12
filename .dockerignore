@@ -1,8 +1,12 @@
+# 版本控制忽略
+.git
+.gitignore
+
 # 本地敏感文件：会话凭证（加密）与加密密钥，切勿提交
 .secret
 sessions.json
 
-# 部署：含密钥的 .env 与持久化数据卷
+# Docker / 部署
 .env
 data/
 
