@@ -294,6 +294,9 @@ class WorktileClient:
 
         由于 Worktile 任务列表接口按项目分页，这里对projects逐个拉取、合并成一个
         全局列表再做切片分页；has_more 通过检查剩余项目/分页是否还有数据来判定。
+
+        同时把每个项目 V1 接口已知的 total 累加成「全局已知 total」，
+        供前端翻页器显示「共 N 页」，避免出现「（还有更多）」的占位提示。
         """
         member_map = member_map or {}
         start = page_index * page_size
@@ -301,6 +304,8 @@ class WorktileClient:
         collected = []
         reached_end = False
         stop_idx = -1
+        # 累计各项目 V1 接口的 total（每个项目只在第一次拉到 raw 时记录一次）
+        project_totals = {}
 
         for idx, p in enumerate(projects):
             pi = 0
@@ -312,6 +317,11 @@ class WorktileClient:
                 items = raw.get("items", [])
                 if not items:
                     break
+                # 记录该项目的 total（仅第一次记录，避免重复页造成的误差）
+                if p["id"] not in project_totals:
+                    t = raw.get("total")
+                    if isinstance(t, int):
+                        project_totals[p["id"]] = t
                 for t in items:
                     collected.append(self.normalize_task(
                         t, project_name=p.get("name", ""), member_map=member_map))
@@ -332,19 +342,33 @@ class WorktileClient:
                                       page_index=pi + 1, page_size=1)
             for uid, name in (raw.get("users_map") or {}).items():
                 member_map.setdefault(uid, name)
+            # 顺便补记这条 raw 的 total（如果第一页的 raw 没拿到 total，
+            # 这条 page_size=1 的也会带上 total 字段）
+            if projects[stop_idx]["id"] not in project_totals:
+                t = raw.get("total")
+                if isinstance(t, int):
+                    project_totals[projects[stop_idx]["id"]] = t
             if raw.get("items"):
                 has_more = True
             else:
-                # 检查后续项目是否还有任意任务
+                # 检查后续项目是否还有任意任务；同时记录它们的 total
                 for p in projects[stop_idx + 1:]:
                     raw = self.get_tasks_page(p["id"], page_index=0, page_size=1)
                     for uid, name in (raw.get("users_map") or {}).items():
                         member_map.setdefault(uid, name)
+                    if p["id"] not in project_totals:
+                        t = raw.get("total")
+                        if isinstance(t, int):
+                            project_totals[p["id"]] = t
                     if raw.get("items"):
                         has_more = True
                         break
 
-        return {"items": collected[start:end], "total": None, "has_more": has_more}
+        # 全局已知 total = 各项目 V1 接口 total 的累加
+        # 若没有任何项目返回 total，则 fallback 为 None（前端仍显示「（还有更多）」）
+        global_total = sum(project_totals.values()) if project_totals else None
+
+        return {"items": collected[start:end], "total": global_total, "has_more": has_more}
 
     # 内部全量拉取时使用的单页大小（尽量一次多拉，减少请求次数；
     # 若 Worktile 有上限会自动回落，循环仍靠 has_more 收尾）
