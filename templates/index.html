@@ -1191,10 +1191,10 @@ async function fetchTitleCandidates(){
       + `&q=${encodeURIComponent(q)}&limit=15`);
     state.titleCandidates = data.items || [];
     state.titleIdx = state.titleCandidates.length ? 0 : -1;
+    openTitleMenu();   // 先显示 + 定位；空结果也会显示「没有匹配」提示，避免「什么都不弹」
     renderTitleMenu();
-    const menu = document.getElementById("titleMenu");
-    if (!menu.hidden) positionMenuUnder(menu, document.getElementById("titleSearch"));
   } catch(e){
+    console.error("fetchTitleCandidates failed:", e);
     closeTitleMenu();
   }
 }
