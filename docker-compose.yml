@@ -9,6 +9,10 @@ services:
     environment:
       - PORT=5080
       - FERNET_KEY=${FERNET_KEY}     # 从同目录 .env 读取，务必自己生成并固定
-    # 如需持久化会话（容器重建后不丢登录态），可挂一个卷：
-    # volumes:
-    #   - ./data:/app
+    # 持久化会话文件（容器重建/更新后已登录的租户不丢登录态）。
+    # 只挂单个文件，切勿把整个 /app 挂出来（会覆盖应用代码）。
+    volumes:
+      - wt_sessions:/app/sessions.json
+
+volumes:
+  wt_sessions:                      # 命名卷，由 docker 管理，跨容器重建保留

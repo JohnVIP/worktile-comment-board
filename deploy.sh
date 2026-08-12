@@ -37,11 +37,11 @@ cd "$APP_DIR"
 
 echo "==[3/6] 生成 FERNET_KEY（仅当 .env 不存在）=="
 if [ ! -f .env ]; then
-  if command -v python3 >/dev/null 2>&1; then
+  # Fernet 规范：32 字节的 urlsafe base64 密钥（44 字符，尾随一个 '='）。
+  # 直接用 /dev/urandom 生成，不依赖 python cryptography 是否安装，最稳妥。
+  KEY=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_')
+  if [ -z "$KEY" ] && command -v python3 >/dev/null 2>&1; then
     KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null)
-  fi
-  if [ -z "$KEY" ]; then
-    KEY=$(openssl rand -base64 32 2>/dev/null)
   fi
   printf 'FERNET_KEY=%s\n' "$KEY" > .env
   echo "    已写入 .env（密钥已固定，会话可跨重启保留；如需重置会话改这个值即可）"
