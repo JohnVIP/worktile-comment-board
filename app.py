@@ -257,6 +257,37 @@ def _ensure_member_map(s):
     return s["member_map"]
 
 
+@app.route("/api/task_titles", methods=["GET"])
+def task_titles():
+    """按 title 子串返回候选任务列表（typeahead 用）。
+
+    GET /api/task_titles?project_id=...&q=...&limit=20
+    - q 为空时返回前 limit 条（探索）。
+    - 只返回 id/identifier/title/project_name，响应体积小。
+    """
+    s = _require_session()
+    project_id = request.args.get("project_id", "").strip()
+    if not project_id:
+        abort(400, description="缺少 project_id 参数")
+    q = (request.args.get("q") or "").strip()
+    try:
+        limit = int(request.args.get("limit", 20))
+    except ValueError:
+        limit = 20
+    limit = max(1, min(limit, 50))  # 防止恶意或巨大值
+
+    try:
+        r = s["client"].list_task_titles(
+            s["projects"], project_id, q=q, limit=limit)
+    except RuntimeError as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
+    return jsonify({
+        "ok": True,
+        "items": r.get("items", []),
+        "matched": r.get("matched", 0),
+    })
+
+
 @app.route("/api/tasks", methods=["GET"])
 def tasks():
     s = _require_session()

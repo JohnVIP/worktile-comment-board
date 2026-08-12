@@ -349,34 +349,25 @@ class WorktileClient:
     # 若 Worktile 有上限会自动回落，循环仍靠 has_more 收尾）
     _FETCH_PAGE = 200
 
-    def search_tasks(self, projects, project_id, keyword, page_index=0, page_size=50, member_map=None):
-        """按任务名称做大小写不敏感的子串模糊搜索，跨页/跨项目聚合后分页返回。
+    def _iter_all_tasks(self, projects, project_id, page_size, member_map):
+        """迭代拉取目标范围（单项目或全部项目）的全部任务，yields (task_dict, project_name)。
 
-        - project_id 为 "__all__" 时搜索所有项目；否则仅该项目。
-        - keyword 为空/全空白时退化为对全量任务的普通分页（total 为全量数）。
-        - 返回 {items, total（过滤后总数，精确）, has_more}。
-
-        与 get_all_tasks_page 不同：这里必须先把所有任务拉全再做过滤，
-        否则分页切片会漏掉不在当前页的命中项。
+        封装 search_tasks/list_task_titles 都要用到的「全量遍历」逻辑，避免重复。
         """
         member_map = member_map or {}
-        kw = (keyword or "").strip().lower()
-        all_tasks = []
 
         def _collect(raw, pname):
             for uid, name in (raw.get("users_map") or {}).items():
                 member_map.setdefault(uid, name)
-            items = raw.get("items") or []
-            for t in items:
-                all_tasks.append(self.normalize_task(
-                    t, project_name=pname, member_map=member_map))
+            for t in (raw.get("items") or []):
+                yield self.normalize_task(t, project_name=pname, member_map=member_map), pname
 
         if project_id == "__all__":
             for p in projects:
                 pi = 0
                 while True:
-                    raw = self.get_tasks_page(p["id"], page_index=pi, page_size=self._FETCH_PAGE)
-                    _collect(raw, p.get("name", ""))
+                    raw = self.get_tasks_page(p["id"], page_index=pi, page_size=page_size)
+                    yield from _collect(raw, p.get("name", ""))
                     if not raw.get("has_more", False):
                         break
                     pi += 1
@@ -384,15 +375,82 @@ class WorktileClient:
             project_name = next((p.get("name", "") for p in projects if p.get("id") == project_id), "")
             pi = 0
             while True:
-                raw = self.get_tasks_page(project_id, page_index=pi, page_size=self._FETCH_PAGE)
-                _collect(raw, project_name)
+                raw = self.get_tasks_page(project_id, page_index=pi, page_size=page_size)
+                yield from _collect(raw, project_name)
                 if not raw.get("has_more", False):
                     break
                 pi += 1
 
-        # 按任务名称模糊过滤
-        if kw:
-            all_tasks = [t for t in all_tasks if kw in (t.get("title") or "").lower()]
+    def list_task_titles(self, projects, project_id, q, limit=20, page_size=200):
+        """按 title 子串（大小写不敏感）取候选任务列表，用于前端 typeahead。
+
+        返回 {items: [{task_id, identifier, title, project_name}], matched: int}：
+        - items 至多 limit 条；matched 是过滤后命中总数（前端用于「是否还有更多」提示）。
+        - q 为空时返回前 limit 条全量任务（按拉取顺序），方便探索。
+        - 只拉 title 类字段，不含评论，性能开销很小。
+        """
+        member_map = {}
+        hits = []
+        matched = 0
+        q_lower = (q or "").strip().lower()
+        for t, pname in self._iter_all_tasks(projects, project_id, page_size, member_map):
+            title = t.get("title") or ""
+            if q_lower and q_lower not in title.lower():
+                continue
+            matched += 1
+            if len(hits) < limit:
+                hits.append({
+                    "task_id": t.get("task_id"),
+                    "identifier": t.get("identifier"),
+                    "title": title,
+                    "project_name": pname,
+                })
+        return {"items": hits, "matched": matched}
+
+    def search_tasks(self, projects, project_id, keyword_or_keywords, page_index=0, page_size=50, member_map=None):
+        """按任务名称做大小写不敏感的子串模糊搜索，跨页/跨项目聚合后分页返回。
+
+        - project_id 为 "__all__" 时搜索所有项目；否则仅该项目。
+        - keyword_or_keywords 为 str（多个用 | 分隔）或 list[str]；任一命中即匹配（OR）。
+        - 传空值时退化为对全量任务的普通分页（total 为全量数）。
+        - 返回 {items, total（过滤后总数，精确）, has_more}。
+
+        与 get_all_tasks_page 不同：这里必须先把所有任务拉全再做过滤，
+        否则分页切片会漏掉不在当前页的命中项。
+        """
+        # 归一为 list[str]（OR 语义）
+        if keyword_or_keywords is None or keyword_or_keywords == "":
+            kws = []
+        elif isinstance(keyword_or_keywords, str):
+            kws = [k.strip() for k in keyword_or_keywords.split("|") if k.strip()]
+        else:
+            kws = [str(k).strip() for k in keyword_or_keywords if k and str(k).strip()]
+        kws_lc = [k.lower() for k in kws]
+
+        # 用内部的 page_size=200，避免 project 大时循环太多，但与 search 结果分页独立
+        all_tasks = []
+        for t, _pname in self._iter_all_tasks(projects, project_id, self._FETCH_PAGE,
+                                              member_map or {}):
+            all_tasks.append(t)
+
+        # 按任务名称模糊过滤（OR）
+        if kws_lc:
+            def _hit(task):
+                title = (task.get("title") or "").lower()
+                return any(kw in title for kw in kws_lc)
+            all_tasks = [t for t in all_tasks if _hit(t)]
+
+        # 去重（按 task_id，避免 OR 出现重复命中）
+        seen = set()
+        uniq = []
+        for t in all_tasks:
+            tid = t.get("task_id")
+            if tid and tid in seen:
+                continue
+            if tid:
+                seen.add(tid)
+            uniq.append(t)
+        all_tasks = uniq
 
         # 分页
         total = len(all_tasks)
