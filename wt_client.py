@@ -345,6 +345,65 @@ class WorktileClient:
 
         return {"items": collected[start:end], "total": None, "has_more": has_more}
 
+    # 内部全量拉取时使用的单页大小（尽量一次多拉，减少请求次数；
+    # 若 Worktile 有上限会自动回落，循环仍靠 has_more 收尾）
+    _FETCH_PAGE = 200
+
+    def search_tasks(self, projects, project_id, keyword, page_index=0, page_size=50, member_map=None):
+        """按任务名称做大小写不敏感的子串模糊搜索，跨页/跨项目聚合后分页返回。
+
+        - project_id 为 "__all__" 时搜索所有项目；否则仅该项目。
+        - keyword 为空/全空白时退化为对全量任务的普通分页（total 为全量数）。
+        - 返回 {items, total（过滤后总数，精确）, has_more}。
+
+        与 get_all_tasks_page 不同：这里必须先把所有任务拉全再做过滤，
+        否则分页切片会漏掉不在当前页的命中项。
+        """
+        member_map = member_map or {}
+        kw = (keyword or "").strip().lower()
+        all_tasks = []
+
+        def _collect(raw, pname):
+            for uid, name in (raw.get("users_map") or {}).items():
+                member_map.setdefault(uid, name)
+            items = raw.get("items") or []
+            for t in items:
+                all_tasks.append(self.normalize_task(
+                    t, project_name=pname, member_map=member_map))
+
+        if project_id == "__all__":
+            for p in projects:
+                pi = 0
+                while True:
+                    raw = self.get_tasks_page(p["id"], page_index=pi, page_size=self._FETCH_PAGE)
+                    _collect(raw, p.get("name", ""))
+                    if not raw.get("has_more", False):
+                        break
+                    pi += 1
+        else:
+            project_name = next((p.get("name", "") for p in projects if p.get("id") == project_id), "")
+            pi = 0
+            while True:
+                raw = self.get_tasks_page(project_id, page_index=pi, page_size=self._FETCH_PAGE)
+                _collect(raw, project_name)
+                if not raw.get("has_more", False):
+                    break
+                pi += 1
+
+        # 按任务名称模糊过滤
+        if kw:
+            all_tasks = [t for t in all_tasks if kw in (t.get("title") or "").lower()]
+
+        # 分页
+        total = len(all_tasks)
+        start = page_index * page_size
+        end = start + page_size
+        return {
+            "items": all_tasks[start:end],
+            "total": total,
+            "has_more": end < total,
+        }
+
     @staticmethod
     def normalize_task(task, project_name="", member_map=None):
         """把一条任务原始数据规范化为看板需要的字段"""

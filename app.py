@@ -275,6 +275,8 @@ def tasks():
     if page_size not in PAGE_SIZE_OPTIONS:
         page_size = 50
 
+    keyword = (request.args.get("keyword") or "").strip()
+
     project_name = ""
     for p in s["projects"]:
         if p["id"] == project_id:
@@ -284,7 +286,13 @@ def tasks():
     member_map = _ensure_member_map(s)
 
     try:
-        if project_id == "__all__":
+        if keyword:
+            # 任务名称模糊搜索：先全量拉取再按 title 过滤，最后分页
+            raw = s["client"].search_tasks(
+                s["projects"], project_id, keyword,
+                page_index=page, page_size=page_size, member_map=member_map)
+            project_name = "全部项目" if project_id == "__all__" else project_name
+        elif project_id == "__all__":
             # 跨所有项目聚合（保留分页）
             raw = s["client"].get_all_tasks_page(
                 s["projects"], page_index=page, page_size=page_size, member_map=member_map)
@@ -294,8 +302,11 @@ def tasks():
     except RuntimeError as e:
         return jsonify({"ok": False, "error": str(e)}), 502
 
-    if project_id == "__all__":
-        # wt_client.get_all_tasks_page 已为每条任务设置真实的 project_name，
+    if keyword:
+        # search_tasks 已对每条任务做规范化（含真实 project_name 与负责人映射）
+        items = raw.get("items", [])
+    elif project_id == "__all__":
+        # get_all_tasks_page 已为每条任务设置真实的 project_name，
         # 不要再覆盖，否则前端无法按真实项目分组。
         items = raw.get("items", [])
     else:
@@ -311,6 +322,7 @@ def tasks():
         "page_size": page_size,
         "total": raw.get("total"),
         "has_more": raw.get("has_more", False),
+        "keyword": keyword,
     })
 
 
