@@ -1126,19 +1126,34 @@ async function clearTitleSearch(){
   state.titleDraft = "";
   state.titleCandidates = [];
   state.titleIdx = -1;
+  // 清空 input DOM（包括屏幕上看不到、但 value 残留的字符）
   const input = document.getElementById("titleSearch");
-  if (input) input.value = "";
+  if (input){
+    input.value = "";
+    // 主动派发 input 事件，让 onTitleInputChange 等任何监听者重新计算 has-value 等样式
+    input.dispatchEvent(new Event("input", {bubbles: true}));
+  }
+  renderChips();           // 把 DOM 里的 chip 元素也实际移除（之前漏了，state 清了 DOM 还在）
   closeTitleMenu();
   updateChipSearchState();
   state.page = 0; state.expanded.clear(); state.commentsCache = {};
   await loadTasks();
 }
 
-/** 移除指定 chip（按 id）。 */
+/** 移除指定 chip（按 id），同时清掉输入框里的草稿并刷新表格。 */
 function removeChip(taskId){
   state.titleChips = state.titleChips.filter(c => c.task_id !== taskId);
+  state.titleDraft = "";
+  const input = document.getElementById("titleSearch");
+  if (input){
+    input.value = "";
+    input.dispatchEvent(new Event("input", {bubbles: true}));
+  }
   renderChips();
   updateChipSearchState();
+  // 移除一个 chip 后，剩余 chips 仍作为筛选条件，让表格立刻反映新过滤集
+  state.page = 0; state.expanded.clear(); state.commentsCache = {};
+  loadTasks();
 }
 
 /** 渲染 chips 区。 */
