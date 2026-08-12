@@ -79,10 +79,21 @@
     position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
     pointer-events: none; color: var(--muted); font-size: 12px;
   }
+  /* 通用搜索式下拉（项目选择器 / 任务名候选） */
   .search-select-menu {
-    position: absolute; top: calc(100% + 4px); left: 0; right: 0; max-height: 280px;
+    position: fixed; min-width: 260px; max-height: 320px;
     overflow-y: auto; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.08); z-index: 100;
+    border-radius: 10px; box-shadow: 0 10px 30px rgba(15,23,42,.18);
+    z-index: 2000;
+  }
+  .search-select-menu .menu-title {
+    padding: 8px 12px; font-size: 12px; color: var(--muted);
+    background: #f8fafc; border-bottom: 1px solid var(--border);
+    border-radius: 10px 10px 0 0; display: flex; align-items: center; gap: 6px;
+  }
+  .search-select-menu .menu-title .dot {
+    width: 7px; height: 7px; background: var(--accent); border-radius: 50%;
+    display: inline-block;
   }
   .search-select-menu .opt {
     padding: 8px 12px; cursor: pointer; font-size: 14px; color: var(--text);
@@ -98,6 +109,11 @@
   .search-select-menu .opt-meta { font-size: 12px; color: var(--muted); margin-left: 6px; }
   .search-select-menu .opt-empty {
     padding: 14px; color: var(--muted); text-align: center; font-size: 13px;
+  }
+  .search-select-menu .menu-hint {
+    padding: 6px 12px; font-size: 11.5px; color: var(--muted);
+    background: #fafbfc; border-top: 1px solid var(--border);
+    border-radius: 0 0 10px 10px; text-align: center;
   }
 
   /* 任务名称模糊搜索框 */
@@ -143,6 +159,15 @@
   .chip-search.has-value .search-clear { display: block; }
   .chip-search .search-go {
     padding: 5px 12px; font-size: 13px; line-height: 1;
+  }
+  .chip-hint {
+    flex-basis: 100%; padding: 0 2px; font-size: 11.5px; color: var(--muted);
+    line-height: 1.5;
+  }
+  .chip-hint kbd {
+    display: inline-block; padding: 1px 5px; border-radius: 3px;
+    border: 1px solid #e2e8f0; background: #f1f5f9; font-size: 10.5px;
+    color: #475569;
   }
 
   /* 任务名称命中关键词高亮 */
@@ -413,11 +438,12 @@
         <div class="chip-search" id="chipSearch">
           <div class="chip-area" id="chipArea"></div>
           <div class="search-input" id="titleSearchWrap">
-            <input type="text" id="titleSearch" placeholder="输入关键字，从候选中选择…" autocomplete="off" spellcheck="false">
+            <input type="text" id="titleSearch" placeholder="输入关键字 → 自动搜候选 → 点选加入…" autocomplete="off" spellcheck="false">
             <button id="titleClear" class="search-clear" title="清除全部" onclick="clearTitleSearch()">×</button>
           </div>
-          <button id="titleSearchBtn" class="btn-ghost search-go" onclick="onChipSearch()">查询</button>
+          <button id="titleSearchBtn" class="btn-ghost search-go" onclick="onChipSearch()" title="按已选 chip + 当前草稿执行全局查询">全局查询</button>
           <div class="search-select-menu" id="titleMenu" hidden></div>
+          <div class="chip-hint">提示：输入时自动弹出候选，<kbd>↑</kbd><kbd>↓</kbd> 选择 <kbd>Enter</kbd> 加入；选好后再点「全局查询」才会执行查询并拉评论。</div>
         </div>
       </div>
       <button id="refreshBtn" class="btn-ghost" onclick="refreshAll()" title="重新拉取任务列表与评论">刷新</button>
@@ -442,7 +468,7 @@ const state = {
   titleCandidates: [],    // 当前候选列表（typeahead）
   titleIdx: -1,           // 候选下拉键盘高亮下标
   titleDebounceTimer: null,
-  titleDebounceMs: 300,
+  titleDebounceMs: 100,
   page: 0,
   pageSize: 50,
   total: null,
@@ -553,11 +579,22 @@ function initProjectPicker(){
   });
 }
 
+/** 把 fixed 定位的浮层对齐到 anchor 元素下方（与 input 同宽）。 */
+function positionMenuUnder(menu, anchor){
+  if (!menu || !anchor) return;
+  const r = anchor.getBoundingClientRect();
+  menu.style.minWidth = r.width + "px";
+  menu.style.left = r.left + "px";
+  menu.style.top  = (r.bottom + 4) + "px";
+}
+
 function openProjectMenu(){
   const input = document.getElementById("projectInput");
+  const menu = document.getElementById("projectMenu");
   // 若输入框当前显示的是已选项名，重新聚焦打开时不预填筛选
   renderProjectMenu(input.value === state.projectName ? "" : input.value);
-  document.getElementById("projectMenu").hidden = false;
+  positionMenuUnder(menu, input);
+  menu.hidden = false;
   _pickerHighlighted = -1;
 }
 
@@ -1155,7 +1192,8 @@ async function fetchTitleCandidates(){
     state.titleCandidates = data.items || [];
     state.titleIdx = state.titleCandidates.length ? 0 : -1;
     renderTitleMenu();
-    document.getElementById("titleMenu").hidden = false;
+    const menu = document.getElementById("titleMenu");
+    if (!menu.hidden) positionMenuUnder(menu, document.getElementById("titleSearch"));
   } catch(e){
     closeTitleMenu();
   }
@@ -1164,33 +1202,46 @@ async function fetchTitleCandidates(){
 function renderTitleMenu(){
   const menu = document.getElementById("titleMenu");
   menu.innerHTML = "";
-  if (!state.titleCandidates.length){
+  // 浮层标题（始终显示，让用户知道这是「候选」不是「全局查询结果」）
+  const title = document.createElement("div");
+  title.className = "menu-title";
+  const n = state.titleCandidates.length;
+  title.innerHTML = `<span class="dot"></span>任务候选 · ${n ? n + " 项匹配" : "实时匹配"}
+    <span style="flex:1"></span>
+    <span style="font-size:11px;color:#94a3b8">输入即搜</span>`;
+  menu.appendChild(title);
+  if (!n){
     const empty = document.createElement("div");
     empty.className = "opt-empty";
-    empty.textContent = "没有匹配的任务；从已选 chip 直接点「查询」也会生效";
+    empty.textContent = "没有匹配的任务；直接按 Enter 会把当前草稿当关键字执行全局查询";
     menu.appendChild(empty);
-    return;
+  } else {
+    state.titleCandidates.forEach((cand, i) => {
+      const div = document.createElement("div");
+      div.className = "opt" + (i === state.titleIdx ? " highlighted" : "");
+      div.dataset.idx = String(i);
+      const titleHtml = highlightInline(cand.title || "", state.titleDraft);
+      const meta = (cand.project_name ? `【${cand.project_name}】` : "")
+        + (cand.identifier ? ` · ${cand.identifier}` : "");
+      div.innerHTML =
+        `<div>${titleHtml}</div>`
+        + (meta ? `<div class="opt-meta">${escapeHtml(meta)}</div>` : "");
+      div.addEventListener("mouseenter", () => {
+        state.titleIdx = i; updateTitleHighlight();
+      });
+      div.addEventListener("mousedown", (e) => {
+        // 用 mousedown 避免 input blur 先触发、菜单先关闭
+        e.preventDefault();
+        pickTitleCandidate(i);
+      });
+      menu.appendChild(div);
+    });
   }
-  state.titleCandidates.forEach((cand, i) => {
-    const div = document.createElement("div");
-    div.className = "opt" + (i === state.titleIdx ? " highlighted" : "");
-    div.dataset.idx = String(i);
-    const titleHtml = highlightInline(cand.title || "", state.titleDraft);
-    const meta = (cand.project_name ? `【${cand.project_name}】` : "")
-      + (cand.identifier ? ` · ${cand.identifier}` : "");
-    div.innerHTML =
-      `<div>${titleHtml}</div>`
-      + (meta ? `<div class="opt-meta">${escapeHtml(meta)}</div>` : "");
-    div.addEventListener("mouseenter", () => {
-      state.titleIdx = i; updateTitleHighlight();
-    });
-    div.addEventListener("mousedown", (e) => {
-      // 用 mousedown 避免 input blur 先触发、菜单先关闭
-      e.preventDefault();
-      pickTitleCandidate(i);
-    });
-    menu.appendChild(div);
-  });
+  // 底部使用提示
+  const hint = document.createElement("div");
+  hint.className = "menu-hint";
+  hint.textContent = "↑↓ 选择 · Enter 加入查询 · Esc 关闭";
+  menu.appendChild(hint);
 }
 
 function updateTitleHighlight(){
@@ -1199,7 +1250,9 @@ function updateTitleHighlight(){
 }
 
 function openTitleMenu(){
-  document.getElementById("titleMenu").hidden = false;
+  const menu = document.getElementById("titleMenu");
+  positionMenuUnder(menu, document.getElementById("titleSearch"));
+  menu.hidden = false;
 }
 function closeTitleMenu(){
   const menu = document.getElementById("titleMenu");
@@ -1287,12 +1340,20 @@ function initTitleSearch(){
   input.addEventListener("input", onTitleInputChange);
   input.addEventListener("keydown", onTitleKey);
   input.addEventListener("focus", () => {
+    // 只要草稿非空就拉一次候选，确保用户重新聚焦也能看到结果
     if (state.titleDraft.trim()) fetchTitleCandidates();
   });
   // 点击外部关闭菜单
   document.addEventListener("click", (e) => {
     if (!wrap.contains(e.target)) closeTitleMenu();
   });
+  // fixed 浮层需要跟随滚动/缩放/窗口变化重新对齐（否则会跑位）
+  const reposition = () => {
+    const menu = document.getElementById("titleMenu");
+    if (menu && !menu.hidden) positionMenuUnder(menu, input);
+  };
+  window.addEventListener("scroll", reposition, true);
+  window.addEventListener("resize", reposition);
   renderChips();
   updateChipSearchState();
 }

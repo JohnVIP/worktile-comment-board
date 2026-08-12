@@ -16,7 +16,7 @@ import threading
 from pathlib import Path
 
 from flask import (
-    Flask, request, jsonify, render_template, abort, Response,
+    Flask, request, jsonify, render_template, abort, Response, make_response,
 )
 from cryptography.fernet import Fernet
 from wt_client import WorktileClient
@@ -167,7 +167,11 @@ def handle_400(e):
 
 @app.route("/")
 def index():
-    return render_template("index.html", page_size_options=PAGE_SIZE_OPTIONS)
+    resp = make_response(render_template("index.html", page_size_options=PAGE_SIZE_OPTIONS))
+    # 防止浏览器缓存 HTML，避免用户看不到新版 UI
+    resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 @app.route("/api/login", methods=["POST"])
