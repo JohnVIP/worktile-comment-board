@@ -1,0 +1,22 @@
+# 本地敏感文件：会话凭证（加密）与加密密钥，切勿提交
+.secret
+sessions.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# 运行时日志
+*.log
+/tmp/
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/

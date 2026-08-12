@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Worktile 任务评论区看板</title>
+<style>
+  :root {
+    --bg: #f5f7fa;
+    --panel: #ffffff;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --accent: #2563eb;
+    --accent-soft: #eff6ff;
+    --danger: #dc2626;
+    --tag-img-bg: #fef3c7;
+    --tag-img-fg: #92400e;
+    --tag-file-bg: #e0e7ff;
+    --tag-file-fg: #3730a3;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+  /* ---------- 登录页 ---------- */
+  .login-card {
+    max-width: 420px; margin: 12vh auto; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 12px; padding: 32px;
+    box-shadow: 0 4px 20px rgba(0,0,0,.06);
+  }
+  .login-card h1 { font-size: 20px; margin: 0 0 6px; }
+  .login-card p.sub { color: var(--muted); margin: 0 0 24px; }
+  label.field { display: block; margin-bottom: 16px; }
+  label.field span { display: block; margin-bottom: 6px; font-weight: 600; }
+  input[type=text], input[type=password], select {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: 8px; font-size: 14px; background: #fff; color: var(--text);
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft); }
+  button {
+    cursor: pointer; border: none; border-radius: 8px; font-size: 14px;
+    padding: 10px 16px; background: var(--accent); color: #fff; font-weight: 600;
+  }
+  button:hover { filter: brightness(1.05); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .alert { background: #fef2f2; color: var(--danger); border: 1px solid #fecaca;
+    border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; font-size: 13px; }
+
+  /* ---------- 看板 ---------- */
+  .topbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    margin-bottom: 16px; }
+  .topbar h2 { font-size: 18px; margin: 0; flex: 1; }
+  .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    margin-bottom: 16px; }
+  .toolbar .group { display: flex; align-items: center; gap: 6px; }
+  .toolbar select { width: auto; padding: 8px 10px; }
+
+  /* 搜索式项目选择器 */
+  .search-select { position: relative; display: inline-block; min-width: 220px; }
+  .search-select input {
+    width: 100%; padding: 8px 28px 8px 10px; border: 1px solid var(--border);
+    border-radius: 8px; font-size: 14px; background: #fff; color: var(--text);
+    cursor: pointer;
+  }
+  .search-select input:focus { outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft); }
+  .search-select .caret {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    pointer-events: none; color: var(--muted); font-size: 12px;
+  }
+  .search-select-menu {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0; max-height: 280px;
+    overflow-y: auto; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.08); z-index: 100;
+  }
+  .search-select-menu .opt {
+    padding: 8px 12px; cursor: pointer; font-size: 14px; color: var(--text);
+    border-bottom: 1px solid #f3f4f6;
+  }
+  .search-select-menu .opt:last-child { border-bottom: none; }
+  .search-select-menu .opt:hover,
+  .search-select-menu .opt.highlighted { background: var(--accent-soft); }
+  .search-select-menu .opt.selected { font-weight: 600; color: var(--accent); }
+  .search-select-menu .opt .hl {
+    background: #fff3a0; color: #333; border-radius: 2px; padding: 0 1px;
+  }
+  .search-select-menu .opt-meta { font-size: 12px; color: var(--muted); margin-left: 6px; }
+  .search-select-menu .opt-empty {
+    padding: 14px; color: var(--muted); text-align: center; font-size: 13px;
+  }
+
+  table { width: 100%; border-collapse: collapse; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  /* 项目卡片内的表格：固定列宽，所有卡片共用同一套宽度 */
+  table.proj-table { table-layout: fixed; }
+  table.proj-table th, table.proj-table td {
+    overflow-wrap: anywhere; word-break: break-all; /* 长字段自动换行 */
+  }
+  th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--border);
+    vertical-align: top; }
+  th { background: #f9fafb; font-weight: 600; color: var(--muted); font-size: 13px; }
+  tbody tr.task-row:hover { background: var(--accent-soft); }
+  /* 项目名称合并单元格（Excel 跨行合并风格） */
+  /* 每个项目一个独立 <table>，外加 .proj-block 分组卡片 */
+  .proj-block {
+    margin-bottom: 16px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .proj-block:last-child { margin-bottom: 0; }
+  .proj-block table { border: none; border-radius: 0; }   /* 让卡片自带的边框生效 */
+  td.proj-cell {
+    background: #eef4ff;            /* 浅蓝底，明显区别于白底任务行 */
+    vertical-align: top;             /* 顶对齐：长项目名时保持从顶端开始阅读 */
+    font-weight: 700; font-size: 15px;
+    color: #1e3a8a;
+    line-height: 1.4;
+    /* 四周都有边框，让合并区域边界清晰 */
+    border-top: 2px solid #93c5fd;
+    border-bottom: 2px solid #93c5fd;
+    border-left: 2px solid #93c5fd;
+    border-right: 2px solid #2563eb;  /* 右侧加重，做"分栏线" */
+    padding: 12px 14px;
+    /* 注意：不要对 td 用 position: sticky，Chrome/Safari 对 td 的 sticky
+       支持不完善，会让同一列的合并单元格错位呈现"嵌套"假象 */
+  }
+  td.proj-cell .proj-name {
+    /* 让长项目名在 160px 列内自动换行，不会撑爆单元格 */
+    overflow-wrap: anywhere;
+    word-break: break-all;
+    display: block;
+  }
+  td.proj-cell .proj-count {
+    display: block; margin-top: 6px;       /* 任务数独占一行，更像 Excel 标签 */
+    font-weight: 500; font-size: 12px;
+    color: #475569;
+  }
+  .muted { color: var(--muted); }
+
+  /* 任务行内的评论列：紧凑堆叠多条评论 */
+  td.cell-comments { vertical-align: top; }
+  td.cell-comments .comments-inner { padding: 0; }
+  .comment-block {
+    border-left: 3px solid var(--accent-soft);
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    background: #fbfcfe;
+    border-radius: 0 6px 6px 0;
+  }
+  .comment-block:last-child { margin-bottom: 0; }
+  .comment-block .meta {
+    font-size: 12px; color: var(--muted); margin-bottom: 3px;
+  }
+  .comment-block .meta b { color: var(--text); margin-right: 4px; }
+  .comment-block .body.emoji-only {
+    font-size: 28px; line-height: 1.2;
+    padding: 4px 0 2px;
+  }
+  .comment-block .body {
+    font-size: 13px; line-height: 1.5;
+    word-break: break-word;
+  }
+  /* 评论正文段落换行 */
+  .comment-block .body p { margin: 0 0 6px; line-height: 1.55; word-break: break-word; }
+  .comment-block .body p:last-child { margin-bottom: 0; }
+  /* 行内 code（含 markdown `code`） */
+  .comment-block .body code:not(pre code) {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: #f1f5f9; color: #0f172a;
+    padding: 1px 5px; border-radius: 3px;
+    border: 1px solid #e2e8f0;
+    font-size: 12.5px; word-break: break-all;
+  }
+  /* 代码块（``` ``` 包裹 / 启发式 shell 段） */
+  .comment-block .body pre.code-block {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: #0f172a; color: #e2e8f0;
+    padding: 10px 12px; border-radius: 6px;
+    margin: 6px 0; overflow-x: auto;
+    font-size: 12.5px; line-height: 1.55;
+    white-space: pre; word-break: normal;
+    border: 1px solid #1e293b;
+  }
+  .comment-block .body pre.code-block .lang {
+    display: block;
+    color: #64748b; font-size: 11px;
+    margin-bottom: 6px; letter-spacing: .05em;
+    text-transform: uppercase; user-select: none;
+  }
+  .comment-block .atts {
+    margin-top: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  /* 图片附件：垂直卡片（缩略图上 + 文件名下），长文件名自动换行 */
+  .comment-block .att.img-type {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 4px;
+    max-width: 200px;
+    background: #ecfeff;
+    color: #155e75;
+    border: 1px solid #a5f3fc;
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  /* 文件附件：链接，长文件名自动换行 */
+  .comment-block .att.file-type {
+    display: inline-flex;
+    align-items: flex-start;
+    padding: 4px 8px;
+    max-width: 240px;
+    background: #f1f5f9;
+    color: #334155;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    font-size: 12px;
+    text-decoration: none;
+    word-break: break-all;
+  }
+  .comment-block .att.file-type:hover { background: #e2e8f0; }
+  /* 文件名：自动换行 */
+  .comment-block .att .fname {
+    font-weight: 500;
+    display: block;
+    width: 100%;
+    word-break: break-all;
+    line-height: 1.4;
+  }
+  /* 图片缩略图：可点击放大，宽度在父容器内自适应 */
+  .att-thumb {
+    display: block;
+    max-width: 100%;
+    max-height: 92px;
+    width: auto; height: auto;
+    border-radius: 4px;
+    border: 1px solid #cbd5e1;
+    object-fit: cover;
+    cursor: zoom-in;
+  }
+  /* 图片放大遮罩层 */
+  #lightbox {
+    position: fixed; inset: 0; z-index: 9999;
+    display: none;
+    align-items: center; justify-content: center;
+    background: rgba(15, 23, 42, 0.82);
+    cursor: zoom-out;
+  }
+  #lightbox.active { display: flex; }
+  #lightbox img {
+    max-width: 92vw; max-height: 92vh;
+    object-fit: contain;
+    border-radius: 6px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  }
+  .cell-loading, .cell-empty, .cell-error {
+    font-size: 12px; color: var(--muted); padding: 6px 0;
+  }
+  .cell-error { color: #b91c1c; }
+  .comment .empty { color: var(--muted); font-style: italic; }
+  .loading { padding: 24px; text-align: center; color: var(--muted); }
+  .loading.error { color: var(--danger); background: #fef2f2; border-radius: 6px; border: 1px solid #fecaca; }
+  .error-hint { margin-top: 8px; font-size: 12px; color: var(--muted); }
+
+  /* 分页 */
+  .pager { display: flex; align-items: center; justify-content: center;
+    gap: 12px; flex-wrap: wrap; margin-top: 18px; margin-bottom: 8px; }
+  .pager .info { color: var(--muted); }
+  .pager select { padding: 7px 10px; }
+  .pager .page-jump { display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--muted); }
+  .pager .page-input {
+    width: 56px; padding: 6px 8px; text-align: center;
+    border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px;
+    background: #fff;
+  }
+  .pager .page-input:focus { outline: none;
+    border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.15); }
+  .pager .page-input:disabled { background: #f1f5f9; color: #94a3b8; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- 登录页 -->
+  <div id="loginView">
+    <div class="login-card">
+      <h1>Worktile 任务评论区看板</h1>
+      <p class="sub">输入租户的 Client ID 与 Client Secret 即可查看对应数据（公有云）</p>
+      <div id="loginAlert" class="alert hidden"></div>
+      <label class="field">
+        <span>Client ID</span>
+        <input type="text" id="clientId" placeholder="请输入 Client ID" autocomplete="off">
+      </label>
+      <label class="field">
+        <span>Client Secret</span>
+        <input type="password" id="clientSecret" placeholder="请输入 Client Secret" autocomplete="off">
+      </label>
+      <button id="loginBtn" style="width:100%" onclick="doLogin()">进入看板</button>
+    </div>
+  </div>
+
+  <!-- 看板页 -->
+  <div id="boardView" class="hidden">
+    <div class="topbar">
+      <h2>任务评论区看板</h2>
+      <button class="btn-ghost" onclick="doLogout()">退出登录</button>
+    </div>
+
+    <div class="toolbar">
+      <div class="group">
+        <span class="muted">项目：</span>
+        <div class="search-select" id="projectPicker">
+          <input type="text" id="projectInput" placeholder="搜索或选择项目…" autocomplete="off" spellcheck="false">
+          <span class="caret">▾</span>
+          <div class="search-select-menu" id="projectMenu" hidden></div>
+        </div>
+      </div>
+      <div class="group">
+        <span class="muted">每页</span>
+        <select id="pageSize" onchange="onPageSizeChange()">
+          {% for opt in page_size_options %}
+          <option value="{{ opt }}" {% if opt == 50 %}selected{% endif %}>{{ opt }}</option>
+          {% endfor %}
+        </select>
+        <span class="muted">条</span>
+      </div>
+      <button id="refreshBtn" class="btn-ghost" onclick="refreshAll()" title="重新拉取任务列表与评论">刷新</button>
+    </div>
+
+    <div id="tableArea"></div>
+
+    <div class="pager" id="pager"></div>
+  </div>
+
+</div>
+
+<script>
+const state = {
+  projectId: "__all__",
+  projectName: "全部项目",
+  projects: [],       // 项目列表缓存（来自 /api/projects）
+  page: 0,
+  pageSize: 50,
+  total: null,
+  hasMore: false,
+  expanded: new Set(),
+  commentsCache: {},   // taskId -> comments array
+};
+
+function show(el){ document.getElementById(el).classList.remove("hidden"); }
+function hide(el){ document.getElementById(el).classList.add("hidden"); }
+
+async function api(path, opts){
+  const resp = await fetch(path, Object.assign({credentials:"same-origin"}, opts));
+  let data = null;
+  try { data = await resp.json(); } catch(e){}
+  if (resp.status === 401){
+    // 会话失效，回到登录页
+    hide("boardView"); show("loginView");
+    throw new Error("会话已失效，请重新登录");
+  }
+  if (!resp.ok || (data && data.ok === false)){
+    throw new Error((data && data.error) || ("请求失败：" + resp.status));
+  }
+  return data;
+}
+
+async function doLogin(){
+  const btn = document.getElementById("loginBtn");
+  const alert = document.getElementById("loginAlert");
+  alert.classList.add("hidden");
+  const clientId = document.getElementById("clientId").value.trim();
+  const clientSecret = document.getElementById("clientSecret").value.trim();
+  if (!clientId || !clientSecret){
+    alert.textContent = "Client ID 和 Client Secret 均不能为空";
+    alert.classList.remove("hidden");
+    return;
+  }
+  btn.disabled = true; btn.textContent = "验证中…";
+  try {
+    const r = await api("/api/login", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({client_id: clientId, client_secret: clientSecret})
+    });
+    hide("loginView"); show("boardView");
+    await loadProjects();
+  } catch(e){
+    alert.textContent = e.message;
+    alert.classList.remove("hidden");
+  } finally {
+    btn.disabled = false; btn.textContent = "进入看板";
+  }
+}
+
+async function doLogout(){
+  try { await api("/api/logout", {method:"POST"}); } catch(e){}
+  state.expanded.clear(); state.commentsCache = {};
+  hide("boardView"); show("loginView");
+  document.getElementById("clientSecret").value = "";
+}
+
+async function loadProjects(){
+  const data = await api("/api/projects");
+  state.projects = data.projects || [];
+  renderProjectMenu("");
+  if (data.projects && data.projects.length){
+    selectProject("__all__", "全部项目");
+  } else if (data.error){
+    document.getElementById("tableArea").innerHTML =
+      '<div class="loading error">加载项目失败：' + escapeHtml(data.error) +
+      '<div class="error-hint">请检查网络代理是否能访问 Worktile 服务器（沙箱出网代理可能会拦截）。</div></div>';
+  } else {
+    document.getElementById("tableArea").innerHTML =
+      '<div class="loading">该租户下没有可用的项目</div>';
+  }
+}
+
+function selectProject(id, name){
+  state.projectId = id;
+  state.projectName = name;
+  closeProjectMenu();
+  state.page = 0; state.expanded.clear(); state.commentsCache = {};
+  loadTasks();
+}
+
+/* ====================== 搜索式项目选择器 ====================== */
+let _pickerHighlighted = -1;
+
+function initProjectPicker(){
+  const input = document.getElementById("projectInput");
+  const menu = document.getElementById("projectMenu");
+  const picker = document.getElementById("projectPicker");
+  input.addEventListener("focus", () => {
+    input.select();
+    openProjectMenu();
+  });
+  input.addEventListener("input", () => renderProjectMenu(input.value));
+  input.addEventListener("keydown", onProjectKey);
+  // 点击外部自动关闭
+  document.addEventListener("click", (e) => {
+    if (!picker.contains(e.target)) closeProjectMenu();
+  });
+}
+
+function openProjectMenu(){
+  const input = document.getElementById("projectInput");
+  // 若输入框当前显示的是已选项名，重新聚焦打开时不预填筛选
+  renderProjectMenu(input.value === state.projectName ? "" : input.value);
+  document.getElementById("projectMenu").hidden = false;
+  _pickerHighlighted = -1;
+}
+
+function closeProjectMenu(){
+  document.getElementById("projectMenu").hidden = true;
+  document.getElementById("projectInput").value = state.projectName || "";
+  _pickerHighlighted = -1;
+}
+
+function renderProjectMenu(filterText){
+  const menu = document.getElementById("projectMenu");
+  menu.innerHTML = "";
+  const items = [{id:"__all__", name:"全部项目"}]
+    .concat((state.projects || []).map(p => ({id: p.id, name: p.name})));
+  const q = (filterText || "").trim().toLowerCase();
+  const filtered = q
+    ? items.filter(it => it.name.toLowerCase().includes(q))
+    : items;
+  if (!filtered.length){
+    const empty = document.createElement("div");
+    empty.className = "opt-empty";
+    empty.textContent = "没有匹配的项目";
+    menu.appendChild(empty);
+    return;
+  }
+  filtered.forEach((it, idx) => {
+    const div = document.createElement("div");
+    div.className = "opt" + (it.id === state.projectId ? " selected" : "");
+    div.dataset.id = it.id;
+    if (q){
+      const lower = it.name.toLowerCase();
+      const pos = lower.indexOf(q);
+      if (pos >= 0){
+        div.innerHTML =
+          escapeHtml(it.name.slice(0, pos)) +
+          '<span class="hl">' + escapeHtml(it.name.slice(pos, pos + q.length)) + '</span>' +
+          escapeHtml(it.name.slice(pos + q.length));
+      } else {
+        div.textContent = it.name;
+      }
+    } else {
+      div.textContent = it.name;
+    }
+    div.addEventListener("click", () => selectProject(it.id, it.name));
+    div.addEventListener("mouseenter", () => {
+      _pickerHighlighted = idx;
+      updatePickerHighlight();
+    });
+    menu.appendChild(div);
+  });
+}
+
+function updatePickerHighlight(){
+  const items = document.querySelectorAll("#projectMenu .opt");
+  items.forEach((el, i) => el.classList.toggle("highlighted", i === _pickerHighlighted));
+}
+
+function scrollHighlightedIntoView(){
+  const menu = document.getElementById("projectMenu");
+  const el = menu.querySelector(".opt.highlighted");
+  if (el) el.scrollIntoView({block:"nearest"});
+}
+
+function onProjectKey(e){
+  const menu = document.getElementById("projectMenu");
+  const input = document.getElementById("projectInput");
+  if (e.key === "Escape"){
+    closeProjectMenu();
+    input.blur();
+    e.preventDefault();
+    return;
+  }
+  const items = Array.from(document.querySelectorAll("#projectMenu .opt"));
+  if (e.key === "ArrowDown"){
+    if (menu.hidden) openProjectMenu();
+    _pickerHighlighted = Math.min(_pickerHighlighted + 1, Math.max(items.length - 1, 0));
+    updatePickerHighlight();
+    scrollHighlightedIntoView();
+    e.preventDefault();
+  } else if (e.key === "ArrowUp"){
+    _pickerHighlighted = Math.max(_pickerHighlighted - 1, 0);
+    updatePickerHighlight();
+    scrollHighlightedIntoView();
+    e.preventDefault();
+  } else if (e.key === "Enter"){
+    if (!menu.hidden && _pickerHighlighted >= 0 && items[_pickerHighlighted]){
+      const it = items[_pickerHighlighted];
+      selectProject(it.dataset.id, it.textContent.trim());
+    }
+    e.preventDefault();
+  }
+}
+function onPageSizeChange(){
+  state.pageSize = parseInt(document.getElementById("pageSize").value, 10);
+  state.page = 0; state.expanded.clear(); state.commentsCache = {};
+  loadTasks();
+}
+
+function refreshAll(){
+  // 「刷新」按钮语义：强制重新拉取所有数据（包括评论缓存）。
+  // 否则用户在 Worktile 后台改了评论、点刷新按钮时，评论列表依旧命中
+  // state.commentsCache，看不到新评论。
+  const btn = document.getElementById("refreshBtn");
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const oldText = btn.textContent;
+  btn.textContent = "刷新中…";
+  state.expanded.clear();
+  state.commentsCache = {};
+  loadTasks().finally(() => {
+    // 等 loadTasks 完成（resolve 或 reject）后恢复按钮
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = oldText;
+    }, 400);
+  });
+}
+
+async function loadTasks(){
+  if (!state.projectId) return;
+  const area = document.getElementById("tableArea");
+  area.innerHTML = '<div class="loading">加载任务中…</div>';
+  try {
+    const url = `/api/tasks?project_id=${encodeURIComponent(state.projectId)}`
+      + `&page=${state.page}&page_size=${state.pageSize}`;
+    const data = await api(url);
+    state.total = data.total;
+    state.hasMore = data.has_more;
+    renderTable(data.items || []);
+    renderPager();
+  } catch(e){
+    area.innerHTML = `<div class="alert">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
+}
+
+function renderTable(items){
+  const area = document.getElementById("tableArea");
+  if (!items.length){
+    area.innerHTML = '<div class="loading">该项目下暂无任务</div>';
+    return;
+  }
+  // 按项目名分组；每个项目渲染成独立的 <table>（外加 <div class="proj-block"> 做分组卡片）
+  // 这样 proj 单元格的 rowspan 只在各自表内生效，不会跨组溢出造成"阶梯嵌套"假象
+  const groups = [];
+  for (const t of items){
+    const key = t.project_name || "(未命名项目)";
+    let g = groups[groups.length - 1];
+    if (!g || g.name !== key){ g = {name: key, tasks: []}; groups.push(g); }
+    g.tasks.push(t);
+  }
+  let html = '';
+  groups.forEach(g => {
+    // 任务数 * 2 = 该表总行数（任务行 + 评论明细行），作为 proj 单元格的 rowspan
+    const span = g.tasks.length * 2;
+    html += '<div class="proj-block">';
+    // 统一的列宽定义：所有项目卡片共用同一套宽度，保证卡片间列宽一致
+    // table-layout: fixed 会让 td 服从这里声明的列宽（不被内容撑爆）
+    html += '<table class="proj-table">'
+      + '<colgroup>'
+      +   '<col style="width:160px">'
+      +   '<col style="width:110px">'
+      +   '<col>'                          <!-- 任务名称列：自动伸缩 -->
+      +   '<col style="width:140px">'
+      +   '<col style="width:160px">'
+      +   '<col>'                          <!-- 评论列：自动伸缩，渲染评论内容 -->
+      + '</colgroup>'
+      + '<thead><tr>'
+      + '<th>项目名称</th>'
+      + '<th>任务编号</th><th>任务名称</th>'
+      + '<th>任务负责人</th><th>最近更新时间</th><th>评论</th>'
+      + '</tr></thead><tbody>';
+    g.tasks.forEach((t, idx) => {
+      const cached = state.commentsCache[t.task_id];
+      const isFirst = idx === 0;
+      // 评论列渲染策略：
+      //   - 未拉取（undefined）：显示「加载评论中…」
+      //   - 已拉取为空数组（[]）：显示「该任务暂无评论」
+      //   - 已拉取有数据：直接堆叠渲染（按倒序，多条独立成块）
+      let commentsHtml;
+      if (cached === undefined){
+        commentsHtml = '<div class="cell-loading">加载评论中…</div>';
+      } else if (!cached.length){
+        commentsHtml = '<div class="cell-empty">该任务暂无评论</div>';
+      } else {
+        commentsHtml = renderComments(cached);
+      }
+      // 合并跨度 = 项目任务数（详情行已去掉）
+      const span = g.tasks.length;
+      html += `<tr class="task-row" data-id="${escapeHtml(t.task_id)}">`;
+      if (isFirst){
+        html += `<td class="proj-cell" rowspan="${span}">`
+          + `<span class="proj-name">${escapeHtml(g.name)}</span>`
+          + `<span class="proj-count">共 ${g.tasks.length} 条</span>`
+          + '</td>';
+      }
+      html += `<td class="cell-id">${escapeHtml(t.identifier || "-")}</td>`
+        + `<td class="cell-title">${escapeHtml(t.title)}</td>`
+        + `<td>${escapeHtml(t.assignee)}</td>`
+        + `<td>${escapeHtml(t.updated_at_str)}</td>`
+        + `<td class="cell-comments" data-comments="${escapeHtml(t.task_id)}">${commentsHtml}</td>`
+        + '</tr>';
+    });
+    html += '</tbody></table></div>';
+  });
+  area.innerHTML = html;
+
+  // 首屏渲染后，并发拉取所有未缓存任务的评论（带并发限流，避免瞬时压垮 API）
+  const pending = items.map(t => t.task_id).filter(id => state.commentsCache[id] === undefined);
+  if (pending.length) prefetchComments(pending);
+}
+
+function toggleComments(taskId){
+  // 详情行已去除，保留空函数避免外部历史代码报错
+}
+
+async function prefetchComments(taskIds){
+  // 并发限流：每次最多 6 个并发请求
+  const CONCURRENCY = 6;
+  let i = 0;
+  const workers = Array.from({length: Math.min(CONCURRENCY, taskIds.length)}, async () => {
+    while (i < taskIds.length){
+      const id = taskIds[i++];
+      await loadComments(id);
+    }
+  });
+  await Promise.all(workers);
+}
+
+async function loadComments(taskId){
+  const cell = document.querySelector(`td.cell-comments[data-comments="${cssEscape(taskId)}"]`);
+  if (!cell) return;
+  try {
+    const data = await api("/api/tasks/" + encodeURIComponent(taskId) + "/comments");
+    state.commentsCache[taskId] = data.comments || [];
+    cell.innerHTML = state.commentsCache[taskId].length
+      ? renderComments(state.commentsCache[taskId])
+      : '<div class="cell-empty">该任务暂无评论</div>';
+  } catch(e){
+    cell.innerHTML = `<div class="cell-error">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderComments(comments){
+  if (!comments || !comments.length){
+    return '<div class="cell-empty">该任务暂无评论</div>';
+  }
+  return '<div class="comments-inner">' + comments.map(c => {
+    const atts = (c.attachments || []).map(a => {
+      const name = escapeHtml(a.name || "未命名");
+      if (a.file_id) {
+        const fid = encodeURIComponent(a.file_id);
+        if (a.is_image) {
+          // 图片：缩略图 + 点击放大
+          return `<span class="att img-type">`
+            + `<img class="att-thumb" src="/api/file/${fid}" loading="lazy" alt="${name}" `
+            + `title="点击放大查看" onclick="openLightbox(this.src)">`
+            + `<span class="fname">${name}</span></span>`;
+        }
+        // 文件：新标签打开预览 / 下载
+        return `<a class="att file-type" href="/api/file/${fid}" target="_blank" `
+          + `rel="noopener" title="点击预览 / 下载">📄 <span class="fname">${name}</span></a>`;
+      }
+      // 无 file_id（极少数情况）：降级为纯文本标签
+      const cls = a.is_image ? "att img-type" : "att file-type";
+      const label = a.is_image ? "图片" : "文件";
+      return `<span class="${cls}"><span>${label}</span>`
+        + `<span class="fname">${name}</span></span>`;
+    }).join("");
+    // eslint-disable-next-line no-control-regex
+  const EMOJI_ONLY = /^[\s\u200d\ufe0f]*([\p{Extended_Pictographic}\u200d\ufe0f]+[\s\u200d\ufe0f]*){1,6}$/u;
+  const isEmojiOnly = (s) => typeof s === "string" && EMOJI_ONLY.test(s.trim());
+  const bodyHtml = renderContent(c.content || "");
+  const bodyCls = isEmojiOnly(c.content || "") ? "body emoji-only" : "body";
+    return `<div class="comment-block">`
+      + `<div class="meta"><b>${escapeHtml(c.author)}</b>·${escapeHtml(c.created_at_str)}</div>`
+      + `<div class="${bodyCls}">${bodyHtml}</div>`
+      + (atts ? `<div class="atts">${atts}</div>` : "")
+      + '</div>';
+  }).join("") + '</div>';
+}
+
+/**
+ * 把评论纯文本渲染成结构化 HTML：
+ *  - ```lang\n...\n``` markdown 代码块 → <pre class="code-block">
+ *  - 行内 `code` → <code>code</code>
+ *  - 其他段落合并换行 → <p>...</p>
+ */
+function renderContent(text){
+  if (!text) return "";
+  // 1) 先抽出 ``` 代码块（避免后续行内 code / escape 影响它），用占位符替入
+  const blocks = [];
+  let s = escapeHtml(text).replace(
+    /```([a-zA-Z0-9+_\-]*)[ \t]*\n([\s\S]*?)```/g,
+    (_, lang, code) => {
+      const idx = blocks.length;
+      blocks.push({ lang: lang || "", code });
+      return "\u0000CB" + idx + "\u0000";
+    }
+  );
+  // 2) 行内 `code`
+  s = s.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  // 3) 按行处理：连续非空行合并成 <p>，占位符独立成 <pre>
+  const lines = s.split("\n");
+  const out = [];
+  let para = [];
+  const flush = () => {
+    if (para.length) {
+      out.push("<p>" + para.join("<br>") + "</p>");
+      para = [];
+    }
+  };
+  for (const line of lines){
+    const m = line.match(/^\u0000CB(\d+)\u0000$/);
+    if (m){
+      flush();
+      const b = blocks[+m[1]];
+      const lang = b.lang ? `<span class="lang">${b.lang}</span>` : "";
+      out.push(`<pre class="code-block">${lang}${b.code}</pre>`);
+      continue;
+    }
+    para.push(line);
+  }
+  flush();
+  return out.join("");
+}
+
+function renderPager(){
+  const pager = document.getElementById("pager");
+  const curr = state.page + 1;
+  let totalHtml = "";
+  let maxPage = null;
+
+  if (state.total != null){
+    maxPage = Math.max(1, Math.ceil(state.total / state.pageSize));
+    totalHtml = `<span>共 ${state.total} 条</span>`;
+  } else if (state.hasMore){
+    totalHtml = `<span>第 ${curr} 页（还有更多）</span>`;
+  } else {
+    totalHtml = `<span>第 ${curr} 页</span>`;
+  }
+
+  const jumpHtml = (state.total != null) ? `
+    <span class="page-jump">
+      <span>前往</span>
+      <input id="pageInput" class="page-input" type="number" min="1"
+             max="${maxPage}" value="${curr}"
+             onkeydown="if(event.key==='Enter'){gotoExactPage();}">
+      <span>页 / 共 ${maxPage} 页</span>
+    </span>` : `
+    <span class="page-jump">
+      <span>前往</span>
+      <input id="pageInput" class="page-input" type="number" min="1"
+             placeholder="-" disabled>
+      <span>页</span>
+    </span>`;
+
+  pager.innerHTML = `
+    <button id="prevBtn" ${state.page<=0?'disabled':''} onclick="gotoPage(-1)">上一页</button>
+    ${totalHtml}
+    ${jumpHtml}
+    <button id="nextBtn" ${state.hasMore?'':'disabled'} onclick="gotoPage(1)">下一页</button>
+  `;
+}
+
+function gotoExactPage(){
+  if (state.total == null) return;
+  const input = document.getElementById("pageInput");
+  if (!input) return;
+  let n = parseInt(input.value, 10);
+  if (!Number.isFinite(n) || n < 1) { input.value = state.page + 1; return; }
+  const maxPage = Math.max(1, Math.ceil(state.total / state.pageSize));
+  if (n > maxPage) n = maxPage;
+  input.value = n;
+  const target = n - 1;
+  if (target === state.page) return;
+  state.page = target;
+  loadTasks();
+}
+
+function gotoPage(delta){
+  const next = state.page + delta;
+  if (next < 0) return;
+  if (delta > 0 && !state.hasMore) return;
+  state.page = next;
+  loadTasks();
+}
+
+function cssEscape(s){
+  return String(s).replace(/["\\]/g, "\\$&");
+}
+
+// 回车登录
+document.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !document.getElementById("loginView").classList.contains("hidden")){
+    doLogin();
+  }
+});
+
+// 页面加载：若已有有效会话则自动进入看板，否则显示登录页（解决每次都要输入凭证）
+async function bootstrap(){
+  try {
+    await api("/api/me");      // 401 会自动跳回登录页并抛错
+    hide("loginView"); show("boardView");
+    await loadProjects();
+  } catch(e){
+    hide("boardView"); show("loginView");
+  }
+}
+window.addEventListener("DOMContentLoaded", bootstrap);
+
+// 图片放大预览（lightbox）
+function openLightbox(src){
+  document.getElementById("lightboxImg").src = src;
+  document.getElementById("lightbox").classList.add("active");
+}
+function closeLightbox(){
+  const lb = document.getElementById("lightbox");
+  lb.classList.remove("active");
+  document.getElementById("lightboxImg").src = "";
+}
+// ESC 关闭放大层
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeLightbox(); });
+
+// 初始化搜索式项目选择器
+initProjectPicker();
+</script>
+
+<!-- 图片放大遮罩层 -->
+<div id="lightbox" onclick="closeLightbox()">
+  <img id="lightboxImg" src="" alt="预览大图">
+</div>
+</body>
+</html>
