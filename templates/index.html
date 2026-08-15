@@ -197,6 +197,13 @@
   table.proj-table th, table.proj-table td {
     overflow-wrap: anywhere; word-break: break-all; /* 长字段自动换行 */
   }
+  /* 最后两列（任务负责人、最近更新时间）：时间戳/名字无空格，被 break-all 拆字符后会溢出；
+     改为不拆字符 + 截断省略号，列宽小时显示 ... 而不是内容跑到外面。 */
+  table.proj-table td:nth-last-child(-n+2),
+  table.proj-table th:nth-last-child(-n+2) {
+    overflow-wrap: normal; word-break: normal;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
   /* 表头：作为 resizer 绝对定位的参考系 */
   table.proj-table thead th { position: relative; }
   /* 列宽调节手柄：悬停在 th 右侧边缘 */
@@ -227,7 +234,8 @@
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 10px;
-    overflow: hidden;
+    overflow-x: auto;     /* 表格列宽总和 > 容器宽时允许水平滚动（不裁掉最后几列） */
+    overflow-y: hidden;
   }
   .proj-block:last-child { margin-bottom: 0; }
   .proj-block table { border: none; border-radius: 0; }   /* 让卡片自带的边框生效 */
@@ -1008,8 +1016,8 @@ function renderTable(items){
       html += `<td class="cell-id">${escapeHtml(t.identifier || "-")}</td>`
         + `<td class="cell-title">${buildTaskTitle(t)}</td>`
         + `<td class="cell-comments" data-comments="${escapeHtml(t.task_id)}">${commentsHtml}</td>`
-        + `<td>${escapeHtml(t.assignee)}</td>`
-        + `<td>${escapeHtml(t.updated_at_str)}</td>`
+        + `<td title="${escapeHtml(t.assignee || "")}">${escapeHtml(t.assignee)}</td>`
+        + `<td title="${escapeHtml(t.updated_at || t.updated_at_str)}">${escapeHtml(t.updated_at_str)}</td>`
         + '</tr>';
     });
     html += '</tbody></table></div>';

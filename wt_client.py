@@ -100,16 +100,31 @@ def _extract_assignee_uid(props):
     return None
 
 
-def _ts_to_str(ts):
-    """时间戳 / 时间字符串 -> 可读字符串"""
+def _ts_to_str(ts, full=False):
+    """时间戳 / 时间字符串 -> 可读字符串
+    full=False（默认）：MM-DD HH:MM，省年省秒，节省列宽
+    full=True：YYYY-MM-DD HH:MM:SS，完整时间戳（用于评论元数据等需要精确时间的场景）
+    """
     if ts is None:
         return "-"
+    fmt = "%Y-%m-%d %H:%M:%S" if full else "%m-%d %H:%M"
     if isinstance(ts, (int, float)):
         try:
-            return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+            return datetime.fromtimestamp(ts).strftime(fmt)
         except (ValueError, OSError):
             return str(ts)
-    return str(ts)
+    s = str(ts)
+    # ISO 字符串里也尝试取短格式（裁掉秒和年）
+    if not full and "T" in s and len(s) >= 16:
+        try:
+            # 兼容 2026-08-12T14:43:18.xxxZ / +08:00 / 无时区 三种
+            date_part, _, rest = s.partition("T")
+            mm_dd = "-".join(date_part.split("-")[1:])  # MM-DD
+            hh_mm = rest[:5]                             # HH:MM
+            return f"{mm_dd} {hh_mm}"
+        except Exception:
+            return s
+    return s
 
 
 def _to_sortable(ts):
@@ -601,7 +616,7 @@ class WorktileClient:
                 "author": author if author else "未知",
                 "content": content if isinstance(content, str) else str(content),
                 "created_at": created_at,
-                "created_at_str": _ts_to_str(created_at),
+                "created_at_str": _ts_to_str(created_at, full=True),
                 "attachments": attachments,
             })
 
