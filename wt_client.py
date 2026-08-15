@@ -546,7 +546,7 @@ class WorktileClient:
             "project_name": project_name,
             "assignee": assignee,
             "updated_at": updated_at,
-            "updated_at_str": _ts_to_str(updated_at),
+            "updated_at_str": _ts_to_str(updated_at, full=True),
         }
 
     # ------------------------------------------------------------------ 评论
