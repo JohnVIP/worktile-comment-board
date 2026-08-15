@@ -538,12 +538,6 @@ class WorktileClient:
         assignee_uid = _extract_assignee_uid(props)
         assignee = member_map.get(assignee_uid, assignee_uid) if assignee_uid else "未分配"
         updated_at = task.get("updated_at") or task.get("update_at")
-        _full = _ts_to_str(updated_at, full=True)
-        # 把完整时间戳拆成两段：日期 + 时间，让 updated 列可以两行渲染（窄列下不被截断）
-        if _full and " " in _full:
-            _date, _time = _full.split(" ", 1)
-        else:
-            _date, _time = (_full or "—"), ""
         return {
             "task_id": task_id,
             "identifier": identifier,
@@ -552,9 +546,7 @@ class WorktileClient:
             "project_name": project_name,
             "assignee": assignee,
             "updated_at": updated_at,
-            "updated_at_str": _full,
-            "updated_date": _date,
-            "updated_time": _time,
+            "updated_at_str": _ts_to_str(updated_at, full=True),
         }
 
     # ------------------------------------------------------------------ 评论

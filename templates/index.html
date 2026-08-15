@@ -575,11 +575,13 @@
     color: var(--accent); text-decoration: none; font-weight: 600;
   }
   td.cell-title a:hover { text-decoration: underline; }
-  /* 最近更新时间：弱化显示 + 等宽数字 + 拆两行（日期 / 时间各一段） */
-  td.cell-updated { color: var(--muted); font-size: var(--fs-xs); line-height: 1.35; }
-  td.cell-updated .updated-date,
+  /* 最近更新时间：弱化显示 + 等宽数字。
+     列宽够时单行显示 'YYYY-MM-DD HH:MM:SS'；列宽窄时在中间空格处自然换行成两行。
+     原理：white-space: normal（默认）是空格处可断行的普通排版，浏览器根据可用宽度
+     自动决定是否换行。这里不用 pre-line —— 那会把 \n 当强制换行，列宽够也会换行；
+     这里也用 nowrap + ellipsis —— 那个会把内容截成省略号而非换行。 */
+  td.cell-updated { color: var(--muted); font-size: var(--fs-xs); line-height: 1.35; white-space: normal; }
   td.cell-updated .updated-time {
-    display: block;                /* 每段独占一行，避免窄列下被 nowrap + ellipsis 截成 ... */
     font-variant-numeric: tabular-nums;
   }
   .muted { color: var(--muted); }
@@ -2147,8 +2149,10 @@ function renderTable(items){
           }
           case "updated":
             html += `<td class="cell-updated"${dataMode}${fixStyle} title="${escapeHtml(t.updated_at || t.updated_at_str)}">`
-              + `<span class="updated-date">${escapeHtml(t.updated_date || "—")}</span>`
-              + `<span class="updated-time">${escapeHtml(t.updated_time || "")}</span></td>`;
+              // 白名单中间空格处可断行（white-space: normal 默认行为）：
+              // 列宽够时单行 'YYYY-MM-DD HH:MM:SS'；列宽窄时浏览器自动在空格处换行成两行，
+              // 不需要任何 pre-line / \n 干预。
+              + `<span class="updated-time">${escapeHtml(t.updated_at_str || "—")}</span></td>`;
             break;
           case "proj":
             // 非首列的 proj（理论上不会出现，因 anchor 限制，但兜底用每行重复显示）
