@@ -855,6 +855,12 @@ function loadColumnConfig(){
   // 强制右端点 updated：永远在最后一位、永远可见（端点对称设计 —— proj 在最左、updated 在最右，中间列才能拖动改变列宽）
   state.colOrder = [...state.colOrder.filter(k => k !== "updated"), "updated"];
   state.colVisible["updated"] = true;
+  // 强制中间 auto 列（code / title / owner）一定是 auto —— 不管 localStorage 历史脏数据写的是什么。
+  // 真正的可拖拽列只有 comments（中间固定列），其余中间列永远按内容自适应，不允许手动调宽。
+  // 这样可以根治"任务负责人列可拖拽、遮挡文字"这类问题。
+  for (const k of ["code", "title", "owner"]) {
+    state.colModes[k] = "auto";
+  }
 }
 function saveColumnConfig(){
   try {
@@ -1260,6 +1266,10 @@ function bindColumnResize(){
     _colDrag.hand.classList.remove("dragging");
     document.body.classList.remove("col-resizing");
     saveColumnWidths();
+    // 拖完后：auto 列（比如 owner 任务负责人）可能被双列联动临时拉窄/拉宽，
+    // 这里强制重跑 measureAndFitAutoColumns + expandEndpointColumns，
+    // 让所有 auto 列回到"按内容自适应"的自然宽度，文字不再被遮挡。
+    try { measureAndFitAutoColumns(); expandEndpointColumns(); } catch(e) { console.warn("[post-drag autofit]", e); }
     _colDrag = null;
   });
 }
@@ -1654,16 +1664,19 @@ function renderTable(items){
     });
     colgroupHtml += '</colgroup>';
 
-    // thead：端点列（anchor/endAnchor）和 auto 列不加 resizer —— 只有"中间的 fixed 列"才允许通过拖拽手柄调节列宽。
+    // thead：只有"评论"这一列是真正的中间固定列（可拖拽调节列宽）。
+    // 其他列（端点列 + code/title/owner 这些中间 auto 列）一律不渲染 resizer —— 不管 state.colModes 里写的是什么。
+    // 这样可以无视历史 localStorage 里被误存为 "fixed" 的列设置，保证任务负责人等列始终是 auto-fit。
     let theadHtml = '<thead><tr>';
     visibleCols.forEach((c, renderIdx) => {
       const isLast = renderIdx === visibleCols.length - 1;
       const isAnchor = !!c.anchor || !!c.endAnchor;
       const isAuto = state.colModes[c.key] === "auto";
-      // 端点列 + 自适应列都不渲染 resizer；只有"中间且 fixed"列才有拖拽手柄
-      const resizer = (isLast || isAnchor || isAuto)
-        ? ''
-        : `<span class="col-resizer" data-col="${c.originalIdx}"></span>`;
+      // 真正的中间固定列 = comments（这是列宽可拖拽的唯一列）
+      const isMiddleFixed = !isLast && !isAnchor && c.key === "comments";
+      const resizer = isMiddleFixed
+        ? `<span class="col-resizer" data-col="${c.originalIdx}"></span>`
+        : '';
       // auto 列加一个小角标，提示用户这列是自适应（右端点列不再展示，因为它实质是"吸收容器剩余空间"，不是真正的 auto）
       const tag = (isAuto && !c.endAnchor) ? ' <span class="mode-tag" title="此列按内容自适应列宽">自适应</span>' : '';
       // 端点列加一个角标，提示这是端点不可调整列宽
@@ -2365,8 +2378,9 @@ function buildColumnSettingRow(key, idx){
   const modeSwitch = document.createElement("div");
   modeSwitch.className = "mode-switch";
   const curMode = state.colModes[key] || meta.mode || "auto";
-  // 端点列：禁用切换（避免 auto/fixed 改变后无法重设 resizer 边界）
-  const switchDisabled = isAnchor;
+  // 端点列 + 中间 auto 列（code/title/owner）禁用切换 —— 这些列永远是 auto，
+  // 防止用户把它们误切成 fixed 后又出现"拖拽遮挡文字"的问题。
+  const switchDisabled = isAnchor || ["code", "title", "owner"].includes(key);
   for (const mode of ["fixed", "auto"]){
     const opt = document.createElement("label");
     opt.className = "mode-opt" + (mode === curMode ? " active" : "");
