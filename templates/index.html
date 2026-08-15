@@ -197,6 +197,25 @@
   table.proj-table th, table.proj-table td {
     overflow-wrap: anywhere; word-break: break-all; /* 长字段自动换行 */
   }
+  /* 表头：作为 resizer 绝对定位的参考系 */
+  table.proj-table thead th { position: relative; }
+  /* 列宽调节手柄：悬停在 th 右侧边缘 */
+  table.proj-table .col-resizer {
+    position: absolute; top: 0; right: -3px;
+    width: 8px; height: 100%; cursor: col-resize;
+    z-index: 3; user-select: none;
+  }
+  table.proj-table .col-resizer::after {
+    content: ""; position: absolute; top: 25%; bottom: 25%; left: 3px;
+    width: 2px; background: transparent; border-radius: 2px;
+    transition: background 0.15s;
+  }
+  table.proj-table .col-resizer:hover::after,
+  table.proj-table .col-resizer.dragging::after { background: var(--accent); }
+  /* 拖拽列宽时全局禁用文字选择、强制手型光标 */
+  body.col-resizing, body.col-resizing * {
+    cursor: col-resize !important; user-select: none !important;
+  }
   th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--border);
     vertical-align: top; }
   th { background: #f9fafb; font-weight: 600; color: var(--muted); font-size: 13px; }
@@ -516,7 +535,78 @@ const state = {
   hasMore: false,
   expanded: new Set(),
   commentsCache: {},   // taskId -> comments array
+  colWidths: {},       // 用户自定义列宽（col index -> px），来自 localStorage
 };
+
+// =================== 列宽拖拽调节 ===================
+const COL_WIDTHS_KEY = "wt-board:col-widths";
+
+function loadColumnWidths(){
+  try {
+    const raw = localStorage.getItem(COL_WIDTHS_KEY);
+    if (!raw) return;
+    const obj = JSON.parse(raw);
+    if (obj && typeof obj === "object") state.colWidths = obj;
+  } catch(e){ /* localStorage 可能被禁用，忽略 */ }
+}
+
+function saveColumnWidths(){
+  try { localStorage.setItem(COL_WIDTHS_KEY, JSON.stringify(state.colWidths)); }
+  catch(e){}
+}
+
+// 把 state.colWidths 应用到当前页面所有 .proj-table 的 colgroup 上
+function applyColumnWidths(){
+  const widths = state.colWidths || {};
+  const keys = Object.keys(widths);
+  if (!keys.length) return;
+  document.querySelectorAll("#tableArea .proj-table").forEach(tbl => {
+    const cols = tbl.querySelectorAll("colgroup col");
+    cols.forEach((c, i) => {
+      if (widths[i] != null) c.style.width = widths[i] + "px";
+    });
+  });
+}
+
+// 全局拖拽：仅绑定一次（页面生命周期内）
+let _colDrag = null;
+function bindColumnResize(){
+  // 用事件委托：任何 col-resizer 的 mousedown 都接管（绑在 document 上，避免依赖元素是否存在）
+  document.addEventListener("mousedown", e => {
+    const hand = e.target.closest && e.target.closest(".col-resizer");
+    if (!hand) return;
+    e.preventDefault();
+    const colIdx = parseInt(hand.dataset.col, 10);
+    const table = hand.closest("table");
+    if (!table) return;
+    const col = table.querySelector(`colgroup col:nth-child(${colIdx + 1})`);
+    if (!col) return;
+    _colDrag = {
+      colIdx,
+      startX: e.clientX,
+      startW: col.getBoundingClientRect().width,
+      hand
+    };
+    hand.classList.add("dragging");
+    document.body.classList.add("col-resizing");
+  });
+  document.addEventListener("mousemove", e => {
+    if (!_colDrag) return;
+    const dx = e.clientX - _colDrag.startX;
+    const newW = Math.max(40, Math.round(_colDrag.startW + dx));
+    state.colWidths[_colDrag.colIdx] = newW;
+    // 同步到所有表格的对应 col
+    document.querySelectorAll(`#tableArea .proj-table colgroup col:nth-child(${_colDrag.colIdx + 1})`)
+      .forEach(c => { c.style.width = newW + "px"; });
+  });
+  document.addEventListener("mouseup", () => {
+    if (!_colDrag) return;
+    _colDrag.hand.classList.remove("dragging");
+    document.body.classList.remove("col-resizing");
+    saveColumnWidths();
+    _colDrag = null;
+  });
+}
 
 function show(el){ document.getElementById(el).classList.remove("hidden"); }
 function hide(el){ document.getElementById(el).classList.add("hidden"); }
@@ -884,9 +974,12 @@ function renderTable(items){
       +   '<col style="width:160px">'     <!-- 最近更新时间 -->
       + '</colgroup>'
       + '<thead><tr>'
-      + '<th>项目名称</th>'
-      + '<th>任务编号</th><th>任务名称</th><th>评论</th>'
-      + '<th>任务负责人</th><th>最近更新时间</th>'
+      + '<th><span class="col-resizer" data-col="0"></span>项目名称</th>'
+      + '<th><span class="col-resizer" data-col="1"></span>任务编号</th>'
+      + '<th><span class="col-resizer" data-col="2"></span>任务名称</th>'
+      + '<th><span class="col-resizer" data-col="3"></span>评论</th>'
+      + '<th><span class="col-resizer" data-col="4"></span>任务负责人</th>'
+      + '<th>最近更新时间</th>'
       + '</tr></thead><tbody>';
     g.tasks.forEach((t, idx) => {
       const cached = state.commentsCache[t.task_id];
@@ -922,6 +1015,9 @@ function renderTable(items){
     html += '</tbody></table></div>';
   });
   area.innerHTML = html;
+
+  // 把用户保存的自定义列宽同步到本次渲染出的所有 proj-table 上
+  applyColumnWidths();
 
   // 搜索命中提示横幅（仅在有搜索关键字时显示）
   const kw = buildSearchKeyword();
@@ -1132,6 +1228,8 @@ document.addEventListener("keydown", e => {
 
 // 页面加载：若已有有效会话则自动进入看板，否则显示登录页（解决每次都要输入凭证）
 async function bootstrap(){
+  loadColumnWidths();   // 恢复用户上次拖拽调整过的列宽
+  bindColumnResize();   // 全局一次性绑定列宽拖拽监听
   try {
     const me = await api("/api/me");      // 401 会自动跳回登录页并抛错
     if (me.tenant_host) state.tenantHost = me.tenant_host;
