@@ -960,65 +960,121 @@ function bindColumnResize(){
     const hand = e.target.closest && e.target.closest(".col-resizer");
     if (!hand) return;
     e.preventDefault();
-    const originalIdx = parseInt(hand.dataset.col, 10);
-    if (!Number.isFinite(originalIdx)) return;
+    const L_idx = parseInt(hand.dataset.col, 10);   // resizer 所属列 = 左侧列
+    if (!Number.isFinite(L_idx)) return;
     const table = hand.closest("table");
     if (!table) return;
-    const col = table.querySelector(`colgroup col[data-col="${originalIdx}"]`);
-    if (!col) return;
 
-    // 计算拖拽边界（关键）：
-    //   拖这一列时，表格的总列宽不允许超过"最窄的 .proj-block 容器宽"
-    //   （且不超过 DRAG_COL_MAX_W 绝对上限）。
-    //   maxAllowed = min(DRAG_COL_MAX_W, containerW - 其他列宽之和)。
-    //   其他列宽读本表 colgroup 已写入的 style.width —— 已被 measureAndFitAutoColumns 
-    //   同步到所有表，跨表一致。
+    // 在当前表里按 DOM 顺序找 L、R 两列的 <col> 节点
+    const allCols = [...table.querySelectorAll("colgroup col")];
+    const L_colNode = allCols.find(c => parseInt(c.dataset.col, 10) === L_idx);
+    if (!L_colNode) return;
+    const L_renderIdx = allCols.indexOf(L_colNode);
+    const R_colNode = allCols[L_renderIdx + 1] || null;
+    const R_idx = R_colNode ? parseInt(R_colNode.dataset.col, 10) : null;
+    // R 是不是 auto 列？auto 不写 state.colWidths，但本次拖动期间需要临时调整 col.style.width。
+    const R_isAuto = R_colNode ? (R_colNode.dataset.mode === "auto") : false;
+
+    // 取"最窄 .proj-block 容器宽"作为总宽上限（跨表一致约束）
     const projBlock = table.parentElement;
     const allBlocks = document.querySelectorAll("#tableArea .proj-block");
     let minBlockW = Infinity;
     allBlocks.forEach(b => { if (b.clientWidth && b.clientWidth < minBlockW) minBlockW = b.clientWidth; });
     if (!isFinite(minBlockW)) minBlockW = projBlock.clientWidth || 1200;
 
-    const colsHere = table.querySelectorAll("colgroup col");
+    // L、R 之外的其他列宽之和
     let otherSum = 0;
-    colsHere.forEach(c => {
+    allCols.forEach(c => {
       const ci = parseInt(c.dataset.col, 10);
-      if (ci === originalIdx) return;
+      if (ci === L_idx || ci === R_idx) return;
       let w = parseFloat(c.style.width);
       if (!w || !isFinite(w)) w = c.getBoundingClientRect().width || 0;
       otherSum += w;
     });
-    const maxAllowed = Math.max(
-      DRAG_COL_MIN_W,
-      Math.min(DRAG_COL_MAX_W, Math.floor(minBlockW - otherSum))
-    );
+
+    // 起宽：先读 col.style.width（已被 measureAndFitAutoColumns / mouseup save 写入），
+    // 兜底读 getBoundingClientRect —— 后者在拖动过程中会被列和表格 layout 重算，
+    // 这里只在 mousedown 抓取，所以是稳定的"起宽"。
+    const startWL = (() => {
+      let w = parseFloat(L_colNode.style.width);
+      if (!w || !isFinite(w)) w = L_colNode.getBoundingClientRect().width || 0;
+      return Math.round(w);
+    })();
+    let startWR = 0;
+    if (R_colNode) {
+      let w = parseFloat(R_colNode.style.width);
+      if (!w || !isFinite(w)) w = R_colNode.getBoundingClientRect().width || 0;
+      startWR = Math.round(w);
+    }
 
     _colDrag = {
-      originalIdx,
+      L_idx, R_idx, R_isAuto, R_colNode,
+      hand, table,
       startX: e.clientX,
-      startW: col.getBoundingClientRect().width,
-      hand,
-      table,
-      minW: DRAG_COL_MIN_W,
-      maxW: maxAllowed
+      startWL, startWR,
+      otherSum,
+      maxWL: DRAG_COL_MAX_W,
+      maxWR: DRAG_COL_MAX_W,
+      minBlockW,
+      lastW: { L: startWL, R: startWR }
     };
     hand.classList.add("dragging");
     document.body.classList.add("col-resizing");
   });
+
   document.addEventListener("mousemove", e => {
     if (!_colDrag) return;
     const dx = e.clientX - _colDrag.startX;
-    const desired = _colDrag.startW + dx;
-    // 三段夹紧：[minW, maxW]，区间外"卡死"在边界值 —— 鼠标继续拖也不突破，给用户清晰的边界感。
-    const newW = Math.max(_colDrag.minW, Math.min(_colDrag.maxW, Math.round(desired)));
-    if (newW === _colDrag.lastW) return;
-    _colDrag.lastW = newW;
-    state.colWidths[_colDrag.originalIdx] = newW;
-    // 同步到所有表格的对应 col（按 data-col 原始下标定位）。
-    // table-layout:fixed 下浏览器按 col width 渲染，写 width 后立即生效。
-    document.querySelectorAll(`#tableArea .proj-table colgroup col[data-col="${_colDrag.originalIdx}"]`)
-      .forEach(c => { c.style.width = newW + "px"; });
-    // 同步把 table.style.width = 各列宽之和，保证表格按"确定像素宽"渲染、无均摊展开。
+    const { L_idx, R_idx, R_isAuto, R_colNode, startWL, startWR, otherSum, maxWL, maxWR, minBlockW } = _colDrag;
+
+    // 双列联动核心：L 加 dx、R 减 dx（总列宽不变 = startWL + startWR 不变）。
+    let newWL = Math.round(startWL + dx);
+    let newWR = Math.round(startWR - dx);
+
+    // 1) 单列夹紧
+    newWL = Math.max(DRAG_COL_MIN_W, Math.min(maxWL, newWL));
+    if (R_colNode) newWR = Math.max(DRAG_COL_MIN_W, Math.min(maxWR, newWR));
+    else newWR = 0;
+
+    // 2) 容器上限：L+R 不得超出 minBlockW - otherSum
+    const totalAllow = Math.max(
+      DRAG_COL_MIN_W * (R_colNode ? 2 : 1),
+      Math.floor(minBlockW - otherSum)
+    );
+    if (newWL + newWR > totalAllow){
+      const over = newWL + newWR - totalAllow;
+      // 优先让 R 列承担压缩（保留 L 的调整意愿）
+      if (R_colNode){
+        const shrink = Math.min(newWR - DRAG_COL_MIN_W, over);
+        newWR -= shrink;
+        const rest = over - shrink;
+        if (rest > 0){
+          newWL = Math.max(DRAG_COL_MIN_W, newWL - rest);
+        }
+      } else {
+        newWL = Math.max(DRAG_COL_MIN_W, newWL - over);
+      }
+    }
+
+    // 3) 与上次相同 → 跳过
+    if (newWL === _colDrag.lastW.L && newWR === _colDrag.lastW.R) return;
+    _colDrag.lastW = { L: newWL, R: newWR };
+
+    // 4) 写 state（auto 列不持久化）
+    state.colWidths[L_idx] = newWL;
+    if (R_colNode && !R_isAuto){
+      state.colWidths[R_idx] = newWR;
+    }
+
+    // 5) 同步所有表的对应 col.style.width
+    document.querySelectorAll('#tableArea .proj-table colgroup col[data-col="' + L_idx + '"]')
+      .forEach(c => { c.style.width = newWL + "px"; });
+    if (R_colNode){
+      document.querySelectorAll('#tableArea .proj-table colgroup col[data-col="' + R_idx + '"]')
+        .forEach(c => { c.style.width = newWR + "px"; });
+    }
+
+    // 6) 重算 tbl.style.width = 各列宽之和（确定像素宽）
     document.querySelectorAll("#tableArea .proj-table").forEach(tbl => {
       let total = 0;
       tbl.querySelectorAll("colgroup col").forEach(c => {
@@ -1029,6 +1085,7 @@ function bindColumnResize(){
       tbl.style.width = Math.ceil(total) + "px";
     });
   });
+
   document.addEventListener("mouseup", () => {
     if (!_colDrag) return;
     _colDrag.hand.classList.remove("dragging");
