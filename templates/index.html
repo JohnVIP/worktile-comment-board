@@ -29,7 +29,8 @@
     font-size: 14px;
     line-height: 1.5;
   }
-  .wrap { max-width: 1200px; margin: 0 auto; padding: 24px; }
+  .wrap { width: 1200px; max-width: calc(100vw - 0px); margin: 0 auto; padding: 24px;
+    overflow-x: auto; }   /* 视区 < 1200 时 wrap 自身横滚，proj-block 永远不溢出 */
 
   /* ---------- 登录页 ---------- */
   .login-card {
@@ -974,12 +975,12 @@ function renderTable(items){
     // table-layout: fixed 会让 td 服从这里声明的列宽（不被内容撑爆）
     html += '<table class="proj-table">'
       + '<colgroup>'
-      +   '<col style="width:128px">'     <!-- 项目名称（合并单元格） -->
-      +   '<col style="width:88px">'      <!-- 任务编号 -->
-      +   '<col style="width:200px">'     <!-- 任务名称 -->
-      +   '<col style="width:480px">'     <!-- 评论：挪到任务名后面，给最大列宽 -->
-      +   '<col style="width:96px">'      <!-- 任务负责人 -->
-      +   '<col style="width:120px">'     <!-- 最近更新时间 -->
+      +   '<col style="width:96px">'      <!-- 项目名称（合并单元格） -->
+      +   '<col style="width:72px">'      <!-- 任务编号 -->
+      +   '<col style="width:180px">'     <!-- 任务名称 -->
+      +   '<col style="width:380px">'     <!-- 评论：挪到任务名后面，给最大列宽 -->
+      +   '<col style="width:80px">'      <!-- 任务负责人 -->
+      +   '<col style="width:110px">'     <!-- 最近更新时间 -->
       + '</colgroup>'
       + '<thead><tr>'
       + '<th><span class="col-resizer" data-col="0"></span>项目名称</th>'
