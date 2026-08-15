@@ -201,6 +201,8 @@
      - 关键：measureAndFitAutoColumns() 还会把整张表定宽到"各列宽之和"（确定像素宽），
        让剩余空间 = 0，浏览器不再把容器剩余宽度均摊给 auto 列（否则短 cell 被拉宽）。
      - 列总宽 ≤ 容器时表格居左、右侧留白；列总宽 > 容器时 .proj-block 已设 overflow-x:auto 横滚。
+     - 跨多张项目表时，measureAndFitAutoColumns() 还会取每个 colIdx 在所有表里的"最大值"
+       作为该列的统一宽 —— 保证所有项目表的同一列宽度一致，跨表数据"列对列"自然对齐。
      - table-layout:fixed（而非 auto）：auto 模式下浏览器会把"容器-内容"的剩余空间分配
        给各列（实测 code/owner/updated 被拉到 134/147/160px），fixed + 确定表宽可根治。 */
   table.proj-table { width: auto; table-layout: fixed; }
@@ -820,8 +822,8 @@ function applyColumnWidths(){
 let _colDrag = null;
 
 /**
- * 自适应列精确测量 + 定宽 —— 让自适应列严格贴紧"最长内容"，并把整张表定宽到内容总宽，
- * 从而彻底消除"剩余空间被均摊到各列导致短 cell 被拉宽"的问题。
+ * 自适应列精确测量 + 跨表统一列宽 —— 让自适应列严格贴紧"最长内容"，
+ * 并保证所有项目表用同一套列宽（数据列对列自然对齐）。
  *
  * 为什么之前一直失败（关键坑，已用真实浏览器实测定位）：
  *   table-layout:fixed + table{width:auto} 下，表格的"使用宽度" = max(容器宽, 各列宽之和)。
@@ -832,23 +834,28 @@ let _colDrag = null;
  *
  *   ✅ 唯一可靠解：给表格一个【确定的像素宽度 = 各列宽之和】，让剩余空间 = 0，无空间可分配。
  *
- * 流程（每张 .proj-table 独立计算）：
- *   1. 用列几何位置（rect.left/right）匹配每行 td（避开 proj rowspan 导致的下标错位）
- *   2. 对 auto 列：量取"表头内容宽"与"所有 body cell 内容宽 + padding"的较大者，
- *      targetW = min(AUTO_COL_MAX_W, ceil(max(headerW, bodyW)))
- *   3. 写 col.style.width = targetW（fixed 列保持原宽不动）
- *   4. 按各列"实际渲染宽"（getBoundingClientRect，已含 CSS min-width 兜底）累加，
- *      写 tbl.style.width = 总和（确定像素宽 → 剩余空间 = 0 → 浏览器不再均摊）
+ * 流程（三遍，确保所有表同列同宽）：
+ *   1. 第一遍：每张表各自测量每列目标宽（auto 列基于自身 body+header，fixed 列取 colgroup 既定宽），
+ *      记录到 tableTargets[i]，此时不写 DOM。
+ *   2. 第二遍：对每个 colIdx，在所有表的 targets 里取最大值 → globalMax[colIdx]。
+ *      这样宽窄内容混合的多张表，会按"最宽的那张"的列宽对齐，所有列跨表一致。
+ *   3. 第三遍：把 globalMax[colIdx] 写到所有表的 col.style.width，并写
+ *      tbl.style.width = 各列宽之和（确定像素宽 → 剩余空间 = 0 → 浏览器不再均摊）。
  */
 const AUTO_COL_MAX_W = 320;   // 自适应列内容上限：超长内容截断省略号，避免撑爆整表
 const AUTO_COL_MIN_W = 60;    // 自适应列最小宽（与 td.cell-id/cell-title 的 CSS min-width 对齐，
                               // 避免"表宽 < 列宽之和"导致浏览器反向压缩列）
 function measureAndFitAutoColumns(){
-  document.querySelectorAll("#tableArea .proj-table").forEach(tbl => {
+  const tables = [...document.querySelectorAll("#tableArea .proj-table")];
+  if (!tables.length) return;
+
+  // 第一遍：每张表各自测量每列目标宽（不动 DOM）。返回的每个数组的下标 == 列渲染下标，
+  // 跨表 colIdx 一致（同一 state.colOrder/state.colVisible 派生），所以可以直接逐位取 max。
+  const tableTargets = tables.map(tbl => {
     const cols = tbl.querySelectorAll("colgroup col");
-    if (!cols.length) return;
+    if (!cols.length) return null;
     const trs = tbl.querySelectorAll("tbody tr");
-    if (!trs.length) return;
+    if (!trs.length) return null;
 
     // 列几何位置（rect.left/right）作为锚点：每个 td 用几何范围匹配自己属于哪一列。
     // 不能用 td.children[colIdx] —— proj 单元格 rowspan=N 让后续行 children 下标整体前移，
@@ -856,7 +863,6 @@ function measureAndFitAutoColumns(){
     const colRects = [...cols].map(c => c.getBoundingClientRect());
     const ths = tbl.querySelectorAll("thead th");
 
-    // 第一遍：确定每列"目标宽"并记录到 targets[]，同时写入 auto 列宽度。
     // 注意 fixed 列取既定宽（renderTable / applyColumnWidths 写入的 style.width），
     // 绝不能读当前 rect —— 那可能是上一次被容器撑开后的宽，会越积越大。
     const targets = [];
@@ -910,16 +916,36 @@ function measureAndFitAutoColumns(){
       }
       let targetW = Math.min(AUTO_COL_MAX_W, Math.ceil(Math.max(maxBodyW, maxHeadW)));
       targetW = Math.max(AUTO_COL_MIN_W, targetW);
-      col.style.width = targetW + "px";
       targets[colIdx] = targetW;
     });
+    return targets;
+  });
 
-    // 第二遍：表宽 = 各列"目标宽"之和（确定像素宽，且 == 列宽之和 → 剩余空间 0，
-    // 浏览器不再把容器剩余宽度均摊给 auto 列）。
-    // 关键点：必须从 targets[] 累加，不能读 col.getBoundingClientRect() —— 那时表格仍为旧宽、
-    // 列还处在被容器撑开的状态，读到的会是撑开后的宽，导致表宽虚高、列又被重新分配。
+  // 第二遍：取每个 colIdx 在所有表里的最大值 → 保证所有表用同一套列宽，
+  // 跨表数据"列对列"自然对齐（短内容列也被拉到与最长内容列同宽）。
+  const colCount = tableTargets[0]?.length || 0;
+  const globalMax = [];
+  for (let ci = 0; ci < colCount; ci++){
+    let m = 0;
+    for (const targets of tableTargets){
+      const w = targets?.[ci] || 0;
+      if (w > m) m = w;
+    }
+    globalMax[ci] = m;
+  }
+
+  // 第三遍：把 globalMax 写到所有表的 col.style.width，并按其总和确定每张表的表宽。
+  // 关键点：累加时直接用 globalMax 数组（已确定值），不读实时 col rect。
+  tables.forEach((tbl, ti) => {
+    const cols = tbl.querySelectorAll("colgroup col");
+    const targets = tableTargets[ti];
+    if (!cols.length || !targets) return;
     let total = 0;
-    targets.forEach(tw => { if (tw) total += tw; });
+    cols.forEach((col, colIdx) => {
+      const w = globalMax[colIdx] || targets[colIdx] || 0;
+      col.style.width = w + "px";
+      total += w;
+    });
     tbl.style.width = Math.ceil(total) + "px";
   });
 }
