@@ -646,6 +646,28 @@
   /* 评论正文段落换行 */
   .comment-block .body p { margin: 0 0 6px; line-height: 1.55; word-break: break-word; }
   .comment-block .body p:last-child { margin-bottom: 0; }
+  /* 评论文本里的 URL 自动链接化（renderContent 中识别 https?://...） */
+  .comment-block .body a.cmt-link {
+    color: var(--accent);
+    text-decoration: none;
+    word-break: break-all;
+    border-bottom: 1px solid rgba(79, 70, 229, .35);
+    transition: color .12s, border-color .12s, background .12s;
+  }
+  .comment-block .body a.cmt-link:hover {
+    color: var(--accent-2);
+    background: rgba(79, 70, 229, .08);
+    border-bottom-color: var(--accent);
+  }
+  .comment-block .body a.cmt-link::after {
+    content: "↗";
+    display: inline-block;
+    margin-left: 2px;
+    font-size: 0.85em;
+    opacity: .55;
+    text-decoration: none;
+    vertical-align: baseline;
+  }
   /* 行内 code（含 markdown `code`） */
   .comment-block .body code:not(pre code) {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -2195,6 +2217,13 @@ function renderContent(text){
       blocks.push({ lang: lang || "", code });
       return "\u0000CB" + idx + "\u0000";
     }
+  );
+  // 1.5) 把 URL 渲染成可点击链接（这一步放在代码块占位之后，避免 code 块里的 URL 被错误链接化）。
+  //      URL 终止字符：空白 / 引号 / 括号 / 中括号 / 大括号 / 中文逗号 / < 等。
+  //      escapeHtml 已经把 < > " ' 转义，所以正则无需再考虑这些字符本身；为保险仍写入字符集。
+  s = s.replace(
+    /\bhttps?:\/\/[^\s<>"'`)\]}\,、，；。!！]+/g,
+    (url) => `<a class="cmt-link" href="${url}" target="_blank" rel="noopener noreferrer" title="新标签打开：${url}">${url}</a>`
   );
   // 2) 行内 `code`
   s = s.replace(/`([^`\n]+)`/g, "<code>$1</code>");
