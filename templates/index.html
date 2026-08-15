@@ -1057,13 +1057,16 @@
 // 永远在两端、永远可见、不可被其他列拖到中间；端点列不加 resizer，
 // 只有"中间的列"才允许通过拖拽手柄调节列宽。
 // 模式：fixed=固定列宽（可拖拽调节），auto=按内容自适应列宽。
+// 列默认宽度（按截图实测：项目 230 / 编号 110 / 名称 270 / 负责人 130 / 评论 280 / 时间 90；
+// fixed 列（项目/评论）硬按此值；auto 列（编号/名称/负责人/时间）按内容自适应，
+// 实际渲染中 content 决定最终宽度，DEFAULT_COL_WIDTHS 仅在回退场景使用）
 const COLS_META = [
-  { key: "proj",     label: "项目名称",     width: 150, anchor: true,    mode: "fixed" },
-  { key: "code",     label: "任务编号",     width: 72,                mode: "auto"  },
-  { key: "title",    label: "任务名称",     width: 180,               mode: "auto"  },
-  { key: "comments", label: "评论",        width: 300,               mode: "fixed" },
-  { key: "owner",    label: "任务负责人",   width: 80,                mode: "auto"  },
-  { key: "updated",  label: "最近更新时间", width: 110,  endAnchor: true, mode: "auto" },
+  { key: "proj",     label: "项目名称",     width: 230, anchor: true,    mode: "fixed" },
+  { key: "code",     label: "任务编号",     width: 110,               mode: "auto"  },
+  { key: "title",    label: "任务名称",     width: 270,               mode: "auto"  },
+  { key: "owner",    label: "任务负责人",   width: 130,               mode: "auto"  },
+  { key: "comments", label: "评论",        width: 280,               mode: "fixed" },
+  { key: "updated",  label: "最近更新时间", width: 90,  endAnchor: true, mode: "auto" },
 ];
 const DEFAULT_COL_MODES = Object.fromEntries(COLS_META.map(c => [c.key, c.mode]));
 
@@ -1072,6 +1075,7 @@ const COL_MIN_WIDTH = 36;
 
 const COLUMN_CONFIG_KEY = "wt-board:column-config:v2";   // v2: 增加 modes 字段
 const COL_WIDTHS_KEY    = "wt-board:col-widths:v2";      // 沿用 v2 键；索引按渲染时的当前 col 下标
+const COL_WIDTHS_SCHEMA = 3;                             // 列宽存储 schema：v3 起附带 __schema 字段以利迁移；列顺序/默认值变更时 bump 该值
 const DEFAULT_COL_ORDER = COLS_META.map(c => c.key);
 const DEFAULT_COL_WIDTHS = Object.fromEntries(COLS_META.map(c => [c.key, c.width]));
 
@@ -1105,14 +1109,23 @@ const state = {
 // 注：COL_WIDTHS_KEY 已在 COLS_META 块顶部声明（line 631），避免重复声明。
 
 function loadColumnWidths(){
+  // schema 迁移：v3 之前 colWidths 按下标（render order）存储；改列顺序后下标错位会导致宽度错乱。
+  // 新版写入时附带 __schema 字段；读取时若缺字段即视为旧版本，自动清空。
   try {
     const raw = localStorage.getItem(COL_WIDTHS_KEY);
     if (!raw) return;
     const obj = JSON.parse(raw);
-    if (obj && typeof obj === "object") state.colWidths = obj;
+    if (obj && typeof obj === "object"){
+      if (obj.__schema === COL_WIDTHS_SCHEMA){
+        const { __schema, ...rest } = obj;
+        state.colWidths = rest;
+      } else {
+        state.colWidths = {};  // 旧版本：列顺序或默认值已变，丢弃旧宽度让用户用新默认值
+      }
+    }
   } catch(e){ /* localStorage 可能被禁用，忽略 */ }
   // 迁移：旧版本可能给评论列存了 380px，导致整表溢出容器。
-  // 强制重置为默认宽度（300px），让三遍法重新规划列宽预算。
+  // 强制重置为默认宽度（250px），让三遍法重新规划列宽预算。
   try {
     const commentsIdx = COLS_META.findIndex(c => c.key === "comments");
     if (commentsIdx >= 0 && state.colWidths[commentsIdx] !== undefined) {
@@ -1122,8 +1135,9 @@ function loadColumnWidths(){
 }
 
 function saveColumnWidths(){
-  try { localStorage.setItem(COL_WIDTHS_KEY, JSON.stringify(state.colWidths)); }
-  catch(e){}
+  try {
+    localStorage.setItem(COL_WIDTHS_KEY, JSON.stringify({ ...state.colWidths, __schema: COL_WIDTHS_SCHEMA }));
+  } catch(e){}
 }
 
 // =================== 列配置：显示哪些列、按什么顺序 ===================
@@ -1183,6 +1197,21 @@ function loadColumnConfig(){
   // 这样可以根治"任务负责人列可拖拽、遮挡文字"这类问题。
   for (const k of ["code", "title", "owner"]) {
     state.colModes[k] = "auto";
+  }
+  // 强制中间顺序：code → title → owner → comments。owner 必须在 comments 前面（保持产品视角的阅读次序）：
+  // 编号 → 名称 → 谁负责 → 评论，逻辑递进。
+  {
+    const middle = state.colOrder.filter(k => k !== "proj" && k !== "updated");
+    const preferred = ["code", "title", "owner", "comments"];
+    const seen = new Set();
+    const ordered = [];
+    for (const k of preferred){
+      if (middle.includes(k) && !seen.has(k)){ ordered.push(k); seen.add(k); }
+    }
+    for (const k of middle){
+      if (!seen.has(k)){ ordered.push(k); seen.add(k); }
+    }
+    state.colOrder = ["proj", ...ordered, "updated"];
   }
 }
 function saveColumnConfig(){
@@ -1403,12 +1432,13 @@ function expandEndpointColumns(){
       autoCount++;
     }
   });
-  const MIN_UPDATED = 110;  // updated 列最小保证宽：能放下 "08-12 14:43" 这种内容
+  const MIN_UPDATED = 90;   // updated 列最小保证宽：能放下 "08-12 14:43" 这种内容
+  const MAX_UPDATED = 110;  // updated 列最大宽：禁止扩展到容器剩余空间 —— default 90 已对齐用户视图需要，
+                            // 端点列扩展留给内容更长的评论；过宽的 updated 会"撑出来一片空白"
 
-  if (fixedSum + autoNatural + MIN_UPDATED + overhead <= containerW){
-    // 路径 1：空间充足 → updated 吸收剩余
-    actualUpdated = Math.floor(containerW - fixedSum - autoNatural - overhead);
-    actualUpdated = Math.max(MIN_UPDATED, Math.min(800, actualUpdated));
+  if (fixedSum + autoNatural + MAX_UPDATED + overhead <= containerW){
+    // 路径 1：空间充足 → updated 拿最大允许宽（不再吃剩余空间，多余留给列之间留白）
+    actualUpdated = MAX_UPDATED;
   } else {
     // 路径 2：auto 列需要压缩才能腾出空间（保证 updated 至少 MIN_UPDATED）
     // fixed 列不参与压缩（保留 user 主动设置，如拖宽 comments）
