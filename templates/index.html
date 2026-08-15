@@ -246,7 +246,7 @@
   .muted { color: var(--muted); }
 
   /* 任务行内的评论列：紧凑堆叠多条评论 */
-  td.cell-comments { vertical-align: top; }
+  td.cell-comments { vertical-align: top; overflow-wrap: anywhere; }
   td.cell-comments .comments-inner { padding: 0; }
   .comment-block {
     border-left: 3px solid var(--accent-soft);
@@ -876,17 +876,17 @@ function renderTable(items){
     // table-layout: fixed 会让 td 服从这里声明的列宽（不被内容撑爆）
     html += '<table class="proj-table">'
       + '<colgroup>'
-      +   '<col style="width:160px">'
-      +   '<col style="width:110px">'
-      +   '<col>'                          <!-- 任务名称列：自动伸缩 -->
-      +   '<col style="width:140px">'
-      +   '<col style="width:160px">'
-      +   '<col>'                          <!-- 评论列：自动伸缩，渲染评论内容 -->
+      +   '<col style="width:160px">'     <!-- 项目名称 -->
+      +   '<col style="width:110px">'     <!-- 任务编号 -->
+      +   '<col style="width:18%">'       <!-- 任务名称 -->
+      +   '<col style="width:55%">'       <!-- 评论：挪到任务名后面，给最大列宽 -->
+      +   '<col style="width:140px">'     <!-- 任务负责人 -->
+      +   '<col style="width:160px">'     <!-- 最近更新时间 -->
       + '</colgroup>'
       + '<thead><tr>'
       + '<th>项目名称</th>'
-      + '<th>任务编号</th><th>任务名称</th>'
-      + '<th>任务负责人</th><th>最近更新时间</th><th>评论</th>'
+      + '<th>任务编号</th><th>任务名称</th><th>评论</th>'
+      + '<th>任务负责人</th><th>最近更新时间</th>'
       + '</tr></thead><tbody>';
     g.tasks.forEach((t, idx) => {
       const cached = state.commentsCache[t.task_id];
@@ -914,9 +914,9 @@ function renderTable(items){
       }
       html += `<td class="cell-id">${escapeHtml(t.identifier || "-")}</td>`
         + `<td class="cell-title">${buildTaskTitle(t)}</td>`
+        + `<td class="cell-comments" data-comments="${escapeHtml(t.task_id)}">${commentsHtml}</td>`
         + `<td>${escapeHtml(t.assignee)}</td>`
         + `<td>${escapeHtml(t.updated_at_str)}</td>`
-        + `<td class="cell-comments" data-comments="${escapeHtml(t.task_id)}">${commentsHtml}</td>`
         + '</tr>';
     });
     html += '</tbody></table></div>';
