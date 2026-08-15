@@ -229,8 +229,22 @@
     overflow-wrap: normal; word-break: normal;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  /* 评论列：内容可能很长（多评论+图片），设最大宽度避免撑爆 */
-  table.proj-table td.cell-comments { max-width: 600px; }
+  /* 评论列：内容可能很长（多评论+图片），让列内独立横向滚动，不再撑宽整表 */
+  table.proj-table td.cell-comments {
+    max-width: 600px;
+    overflow: hidden;             /* cell 不撑列，列宽只由 colgroup 决定 */
+  }
+  table.proj-table td.cell-comments .comments-inner {
+    max-width: 100%;              /* 不超过 cell 宽 */
+    overflow-x: auto;             /* 长评论/长附件在 cell 内独立横向滚动 */
+    overflow-y: visible;
+  }
+  /* 评论列的表头：防止"评论"两字被换行 */
+  table.proj-table thead th.cell-comments {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   /* 表头：作为 resizer 绝对定位的参考系 */
   table.proj-table thead th { position: relative; }
   /* 列宽调节手柄：悬停在 th 右侧边缘 */
@@ -685,7 +699,7 @@ const COLS_META = [
   { key: "proj",     label: "项目名称",     width: 96,  anchor: true, mode: "fixed"  },
   { key: "code",     label: "任务编号",     width: 72,               mode: "auto"   },
   { key: "title",    label: "任务名称",     width: 180,              mode: "auto"   },
-  { key: "comments", label: "评论",        width: 380,              mode: "fixed"  },
+  { key: "comments", label: "评论",        width: 300,              mode: "fixed"  },
   { key: "owner",    label: "任务负责人",   width: 80,               mode: "auto"   },
   { key: "updated",  label: "最近更新时间", width: 110,              mode: "auto"   },
 ];
@@ -735,6 +749,14 @@ function loadColumnWidths(){
     const obj = JSON.parse(raw);
     if (obj && typeof obj === "object") state.colWidths = obj;
   } catch(e){ /* localStorage 可能被禁用，忽略 */ }
+  // 迁移：旧版本可能给评论列存了 380px，导致整表溢出容器。
+  // 强制重置为默认宽度（300px），让三遍法重新规划列宽预算。
+  try {
+    const commentsIdx = COLS_META.findIndex(c => c.key === "comments");
+    if (commentsIdx >= 0 && state.colWidths[commentsIdx] !== undefined) {
+      delete state.colWidths[commentsIdx];
+    }
+  } catch(e){}
 }
 
 function saveColumnWidths(){
