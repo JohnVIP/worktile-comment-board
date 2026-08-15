@@ -160,19 +160,43 @@ class WorktileClient:
         return token
 
     def _req(self, method, path, params=None, json=None):
+        def _do_request(token):
+            p = dict(params or {})
+            p["access_token"] = token
+            url = f"{self.base_url}/open-api{path}"
+            try:
+                resp = requests.request(method, url, params=p, json=json, timeout=30)
+            except requests.exceptions.RequestException as e:
+                raise RuntimeError(f"接口请求失败 {path}：{e}")
+            return resp
+
         token = self._token or self._ensure_token()
-        p = dict(params or {})
-        p["access_token"] = token
-        url = f"{self.base_url}/open-api{path}"
-        try:
-            resp = requests.request(method, url, params=p, json=json, timeout=30)
-        except requests.exceptions.RequestException as e:
-            raise RuntimeError(f"接口请求失败 {path}：{e}")
-        # token 失效，刷新重试一次
-        if resp.status_code == 401:
+        resp = _do_request(token)
+
+        # token 失效重试一次的两种信号：
+        # 1) HTTP 401（少数情况下 Worktile 直接返回 401）
+        # 2) HTTP 200 但 body 里 error_code 是认证类（Worktile 大多数情况下用这种方式，
+        #    常见 error_code=1103 "invalid access token"）—— 不识别的话，
+        #    _req 会把 {"ok": false, "error_code": 1103} 当成正常响应返回，
+        #    下游解析成空 items，导致「自动登录 OK 但拿不到数据」。
+        def _need_refresh():
+            if resp.status_code == 401:
+                return True
+            if resp.status_code == 200:
+                try:
+                    body = resp.json()
+                except Exception:
+                    return False
+                # 1102: access_token 格式错误；1103: access_token 无效/过期
+                if body.get("ok") is False and body.get("error_code") in (1102, 1103):
+                    return True
+            return False
+
+        if _need_refresh():
             self._token = None
-            p["access_token"] = self._ensure_token()
-            resp = requests.request(method, url, params=p, json=json, timeout=30)
+            new_token = self._ensure_token()
+            resp = _do_request(new_token)
+
         if resp.status_code >= 400:
             raise RuntimeError(f"接口错误 {resp.status_code} {path}：{resp.text[:300]}")
         return resp.json()
