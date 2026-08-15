@@ -241,6 +241,17 @@
     background: #fef3c7;
     background-image: linear-gradient(to right, #f9fafb 0%, #fef3c7 100%);
   }
+  /* 右端点 th 内的文字右对齐 —— 这样"最近更新时间"标题会贴在 th（=表格）最右边，
+     用户一眼能看到"最近更新时间 = 表格最右一列"，而不是看到它在 th 中间 */
+  table.proj-table th[data-endanchor] {
+    text-align: right;
+    padding-right: 14px;
+  }
+  /* 右端点对应的 td 也右对齐（数据"10-29 11:17"贴在列右边，与表头呼应） */
+  table.proj-table td:last-child {
+    text-align: right;
+    padding-right: 14px;
+  }
   /* 右端点 anchor-tag 用更显眼的样式 */
   table.proj-table th:last-child .anchor-tag {
     background: #fde68a;
@@ -1653,15 +1664,19 @@ function renderTable(items){
       const resizer = (isLast || isAnchor || isAuto)
         ? ''
         : `<span class="col-resizer" data-col="${c.originalIdx}"></span>`;
-      // auto 列加一个小角标，提示用户这列是自适应
-      const tag = isAuto ? ' <span class="mode-tag" title="此列按内容自适应列宽">自适应</span>' : '';
+      // auto 列加一个小角标，提示用户这列是自适应（右端点列不再展示，因为它实质是"吸收容器剩余空间"，不是真正的 auto）
+      const tag = (isAuto && !c.endAnchor) ? ' <span class="mode-tag" title="此列按内容自适应列宽">自适应</span>' : '';
       // 端点列加一个角标，提示这是端点不可调整列宽
       const anchorTag = c.anchor ? ' <span class="anchor-tag" title="左端点列：永远在最左，不可调整列宽">左端点</span>'
                       : c.endAnchor ? ' <span class="anchor-tag" title="右端点列：永远在最右，不可调整列宽">右端点</span>'
                       : '';
-      // 给 th 标 data-mode，CSS 据此设 white-space:nowrap 让列宽紧贴内容
-      const thAttr = isAuto ? ' data-mode="auto"' : '';
-      theadHtml += `<th${thAttr}>${resizer}${escapeHtml(c.label)}${tag}${anchorTag}</th>`;
+      // 给 th 标 data-mode + data-endanchor（端点列 CSS 据此做特殊对齐）
+      // 右端点列 DOM 顺序：[anchor-tag][label]，配合 text-align:right 让 label 贴到表格最右边
+      const thAttr = (isAuto ? ' data-mode="auto"' : '') + (c.endAnchor ? ' data-endanchor="1"' : '');
+      const labelHtml = escapeHtml(c.label);
+      theadHtml += c.endAnchor
+        ? `<th${thAttr}>${resizer}${anchorTag}${tag}${labelHtml}</th>`
+        : `<th${thAttr}>${resizer}${labelHtml}${tag}${anchorTag}</th>`;
     });
     theadHtml += '</tr></thead>';
 
