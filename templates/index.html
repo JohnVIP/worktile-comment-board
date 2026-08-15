@@ -193,7 +193,7 @@
   table { width: 100%; border-collapse: collapse; background: var(--panel);
     border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
   /* 项目卡片内的表格：固定列宽，所有卡片共用同一套宽度 */
-  table.proj-table { table-layout: fixed; }
+  table.proj-table { width: 100%; table-layout: fixed; }
   table.proj-table th, table.proj-table td {
     overflow-wrap: anywhere; word-break: break-all; /* 长字段自动换行 */
   }
@@ -547,7 +547,7 @@ const state = {
 };
 
 // =================== 列宽拖拽调节 ===================
-const COL_WIDTHS_KEY = "wt-board:col-widths";
+const COL_WIDTHS_KEY = "wt-board:col-widths:v2";  // v2: 改 px 默认值，总宽 ≤ 容器宽
 
 function loadColumnWidths(){
   try {
@@ -974,12 +974,12 @@ function renderTable(items){
     // table-layout: fixed 会让 td 服从这里声明的列宽（不被内容撑爆）
     html += '<table class="proj-table">'
       + '<colgroup>'
-      +   '<col style="width:160px">'     <!-- 项目名称 -->
-      +   '<col style="width:110px">'     <!-- 任务编号 -->
-      +   '<col style="width:18%">'       <!-- 任务名称 -->
-      +   '<col style="width:55%">'       <!-- 评论：挪到任务名后面，给最大列宽 -->
-      +   '<col style="width:140px">'     <!-- 任务负责人 -->
-      +   '<col style="width:160px">'     <!-- 最近更新时间 -->
+      +   '<col style="width:128px">'     <!-- 项目名称（合并单元格） -->
+      +   '<col style="width:88px">'      <!-- 任务编号 -->
+      +   '<col style="width:200px">'     <!-- 任务名称 -->
+      +   '<col style="width:480px">'     <!-- 评论：挪到任务名后面，给最大列宽 -->
+      +   '<col style="width:96px">'      <!-- 任务负责人 -->
+      +   '<col style="width:120px">'     <!-- 最近更新时间 -->
       + '</colgroup>'
       + '<thead><tr>'
       + '<th><span class="col-resizer" data-col="0"></span>项目名称</th>'
