@@ -193,18 +193,28 @@
 
   table { width: 100%; border-collapse: collapse; background: var(--panel);
     border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-  /* 项目卡片内的表格：固定列宽，所有卡片共用同一套宽度 */
-  table.proj-table { width: 100%; table-layout: fixed; }
+  /* 项目卡片内的表格：默认 table-layout: auto 让浏览器按内容自适应分配列宽。
+   auto 列按内容算、fixed 列按 col.width 算；列总宽 ≤ 容器时不会溢出。
+   .proj-block 已设 overflow-x:auto，溢出时可横滚。 */
+  table.proj-table { width: 100%; table-layout: auto; }
   table.proj-table th, table.proj-table td {
-    overflow-wrap: anywhere; word-break: break-all; /* 长字段自动换行 */
+    overflow-wrap: anywhere; word-break: break-word;
   }
-  /* 最后两列（任务负责人、最近更新时间）：时间戳/名字无空格，被 break-all 拆字符后会溢出；
+  /* 拖拽调节列宽期间临时切到 fixed，避免拖动过程浏览器重新算列宽导致跳变 */
+  table.proj-table.col-dragging { table-layout: fixed; }
+  /* 任务编号/任务名称/任务负责人/更新时间：通常是短字段，给个最小可见宽度 */
+  table.proj-table td.cell-id,
+  table.proj-table td.cell-title,
+  table.proj-table td:not([class]) { min-width: 60px; }
+  /* 最后两列（任务负责人、最近更新时间）：时间戳/名字无空格，被 break-word 拆字符后会溢出；
      改为不拆字符 + 截断省略号，列宽小时显示 ... 而不是内容跑到外面。 */
   table.proj-table td:nth-last-child(-n+2),
   table.proj-table th:nth-last-child(-n+2) {
     overflow-wrap: normal; word-break: normal;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  /* 评论列：内容可能很长（多评论+图片），设最大宽度避免撑爆 */
+  table.proj-table td.cell-comments { max-width: 600px; }
   /* 表头：作为 resizer 绝对定位的参考系 */
   table.proj-table thead th { position: relative; }
   /* 列宽调节手柄：悬停在 th 右侧边缘 */
@@ -220,6 +230,12 @@
   }
   table.proj-table .col-resizer:hover::after,
   table.proj-table .col-resizer.dragging::after { background: var(--accent); }
+  /* 自适应列标签：表头右侧小角标，让用户知道这列是按内容自适应（不可拖拽） */
+  table.proj-table .mode-tag {
+    display: inline-block; margin-left: 6px; padding: 1px 6px;
+    font-size: 11px; line-height: 1.4; color: var(--muted);
+    background: #f3f4f6; border-radius: 4px; vertical-align: middle;
+  }
   /* 拖拽列宽时全局禁用文字选择、强制手型光标 */
   body.col-resizing, body.col-resizing * {
     cursor: col-resize !important; user-select: none !important;
@@ -514,6 +530,29 @@
     font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
     background: #fef3c7; color: #92400e; border: 1px solid #fde68a;
   }
+  /* 模式切换器：右端，segmented control 风格 */
+  .col-modal .col-row .mode-switch {
+    display: flex; border: 1px solid var(--border); border-radius: 6px;
+    overflow: hidden; background: #fff; flex-shrink: 0;
+  }
+  .col-modal .col-row .mode-switch .mode-opt {
+    display: flex; align-items: center; gap: 4px;
+    padding: 4px 10px; font-size: 12px; color: var(--muted);
+    cursor: pointer; user-select: none;
+    border-right: 1px solid var(--border);
+    transition: background .12s, color .12s;
+  }
+  .col-modal .col-row .mode-switch .mode-opt:last-child { border-right: none; }
+  .col-modal .col-row .mode-switch .mode-opt:hover { background: #f8fafc; }
+  .col-modal .col-row .mode-switch .mode-opt.active {
+    background: var(--accent-soft); color: var(--accent); font-weight: 500;
+  }
+  .col-modal .col-row .mode-switch .mode-opt.disabled {
+    cursor: not-allowed; opacity: .5; background: #f3f4f6;
+  }
+  .col-modal .col-row .mode-switch .mode-opt input[type=radio] {
+    display: none; /* 自定义 segmented 外观，隐藏原生 radio */
+  }
   .col-modal .col-row.anchor { background: #fffbeb; border-color: #fde68a; }
   .col-modal footer {
     display: flex; justify-content: space-between; gap: 12px;
@@ -621,16 +660,21 @@
 <script>
 // ====================== 列定义元数据 ======================
 // 第一列（项目名称）作为分组锚定：永远在第一个、永远可见、不可被其他列拖到前面。
+// 模式：fixed=固定列宽（可拖拽调节），auto=按内容自适应列宽。
 const COLS_META = [
-  { key: "proj",     label: "项目名称",     width: 96,  anchor: true  },
-  { key: "code",     label: "任务编号",     width: 72               },
-  { key: "title",    label: "任务名称",     width: 180              },
-  { key: "comments", label: "评论",        width: 380              },
-  { key: "owner",    label: "任务负责人",   width: 80               },
-  { key: "updated",  label: "最近更新时间", width: 110              },
+  { key: "proj",     label: "项目名称",     width: 96,  anchor: true, mode: "fixed"  },
+  { key: "code",     label: "任务编号",     width: 72,               mode: "auto"   },
+  { key: "title",    label: "任务名称",     width: 180,              mode: "auto"   },
+  { key: "comments", label: "评论",        width: 380,              mode: "fixed"  },
+  { key: "owner",    label: "任务负责人",   width: 80,               mode: "auto"   },
+  { key: "updated",  label: "最近更新时间", width: 110,              mode: "auto"   },
 ];
+const DEFAULT_COL_MODES = Object.fromEntries(COLS_META.map(c => [c.key, c.mode]));
 
-const COLUMN_CONFIG_KEY = "wt-board:column-config:v1";   // 存 { order: [...], visible: {...} }
+// 列宽最小值（自适应/固定列都遵守，避免列窄到看不见）
+const COL_MIN_WIDTH = 36;
+
+const COLUMN_CONFIG_KEY = "wt-board:column-config:v2";   // v2: 增加 modes 字段
 const COL_WIDTHS_KEY    = "wt-board:col-widths:v2";      // 沿用 v2 键；索引按渲染时的当前 col 下标
 const DEFAULT_COL_ORDER = COLS_META.map(c => c.key);
 const DEFAULT_COL_WIDTHS = Object.fromEntries(COLS_META.map(c => [c.key, c.width]));
@@ -658,6 +702,7 @@ const state = {
   colWidths: {},       // 用户自定义列宽（按当前渲染顺序的 col index -> px），来自 localStorage
   colOrder: [...DEFAULT_COL_ORDER],            // 当前列展示顺序（proj 始终在 [0]）
   colVisible: Object.fromEntries(COLS_META.map(c => [c.key, true])),  // 每列显隐
+  colModes: { ...DEFAULT_COL_MODES },          // 每列宽度模式：fixed=固定可拖 / auto=按内容自适应
 };
 
 // =================== 列宽拖拽调节 ===================
@@ -707,17 +752,27 @@ function loadColumnConfig(){
         }
       }
     }
+    // 加载 modes：每列固定/自适应（v2 才有，缺失时回退到默认）
+    if (obj && obj.modes && typeof obj.modes === "object"){
+      for (const c of COLS_META){
+        if (obj.modes[c.key] === "fixed" || obj.modes[c.key] === "auto"){
+          state.colModes[c.key] = obj.modes[c.key];
+        }
+      }
+    }
   } catch(e){ /* localStorage 异常时沿用默认 */ }
-  // 强制锚定列：永远在第一个、永远可见（这是分组合并视觉的硬约束）
+  // 强制锚定列：永远在第一个、永远可见、固定列宽（这是分组合并视觉的硬约束）
   state.colOrder = state.colOrder.filter(k => k !== "proj").concat(["proj"]);
   state.colOrder = ["proj", ...state.colOrder.filter(k => k !== "proj")];
   state.colVisible["proj"] = true;
+  state.colModes["proj"] = "fixed";
 }
 function saveColumnConfig(){
   try {
     localStorage.setItem(COLUMN_CONFIG_KEY, JSON.stringify({
       order: state.colOrder,
-      visible: state.colVisible
+      visible: state.colVisible,
+      modes: state.colModes
     }));
   } catch(e){}
 }
@@ -764,10 +819,13 @@ function bindColumnResize(){
       originalIdx,
       startX: e.clientX,
       startW: col.getBoundingClientRect().width,
-      hand
+      hand,
+      table
     };
     hand.classList.add("dragging");
     document.body.classList.add("col-resizing");
+    // 拖拽期间临时切到 table-layout:fixed，避免 table-layout:auto 下浏览器按内容重算导致跳变
+    table.classList.add("col-dragging");
   });
   document.addEventListener("mousemove", e => {
     if (!_colDrag) return;
@@ -782,6 +840,7 @@ function bindColumnResize(){
     if (!_colDrag) return;
     _colDrag.hand.classList.remove("dragging");
     document.body.classList.remove("col-resizing");
+    if (_colDrag.table) _colDrag.table.classList.remove("col-dragging");
     saveColumnWidths();
     _colDrag = null;
   });
@@ -1160,23 +1219,35 @@ function renderTable(items){
 
     // colgroup：每个 col 用 data-col 存"原始下标"，与 state.colWidths 索引对齐；
     //           这样用户拖动列宽后，即使重排列顺序也不会丢失自定义宽度。
+    //           auto 列不写 style.width，让浏览器按内容自适应；
+    //           fixed 列才写 style.width。
     let colgroupHtml = '<colgroup>';
     visibleCols.forEach((c, renderIdx) => {
-      const defW = DEFAULT_COL_WIDTHS[c.key];
-      const customW = state.colWidths[c.originalIdx];
-      const w = customW || defW;
-      colgroupHtml += `<col data-col="${c.originalIdx}" style="width:${w}px">`;
+      const isAuto = state.colModes[c.key] === "auto";
+      if (isAuto){
+        // 自适应：不指定 width，浏览器按内容分配
+        colgroupHtml += `<col data-col="${c.originalIdx}" data-mode="auto">`;
+      } else {
+        const defW = DEFAULT_COL_WIDTHS[c.key];
+        const customW = state.colWidths[c.originalIdx];
+        const w = customW || defW;
+        colgroupHtml += `<col data-col="${c.originalIdx}" data-mode="fixed" style="width:${w}px">`;
+      }
     });
     colgroupHtml += '</colgroup>';
 
-    // thead：最后一列不加 resizer（没必要再多一根竖线）
+    // thead：auto 列不加 resizer（自适应列没拖的意义），仅 fixed 列可拖
     let theadHtml = '<thead><tr>';
     visibleCols.forEach((c, renderIdx) => {
       const isLast = renderIdx === visibleCols.length - 1;
-      const resizer = isLast
+      const isAuto = state.colModes[c.key] === "auto";
+      // auto 列不渲染 resizer（视觉提示：自适应列没有手动拖拽手柄）
+      const resizer = (isLast || isAuto)
         ? ''
         : `<span class="col-resizer" data-col="${c.originalIdx}"></span>`;
-      theadHtml += `<th>${resizer}${escapeHtml(c.label)}</th>`;
+      // auto 列加一个小角标，提示用户这列是自适应
+      const tag = isAuto ? ' <span class="mode-tag" title="此列按内容自适应列宽">自适应</span>' : '';
+      theadHtml += `<th>${resizer}${escapeHtml(c.label)}${tag}</th>`;
     });
     theadHtml += '</tr></thead>';
 
@@ -1782,16 +1853,18 @@ function onColModalMaskClick(e){
   if (e.target.id === "colModalMask") closeColumnSettings();
 }
 
-/** 重置列设置：清空所有用户改动，回 6 列全显 + 默认顺序 + 默认宽度。 */
+/** 重置列设置：清空所有用户改动，回 6 列全显 + 默认顺序 + 默认宽度 + 默认模式。 */
 function resetColumnSettings(){
   state.colOrder = [...DEFAULT_COL_ORDER];
   for (const c of COLS_META) state.colVisible[c.key] = true;
+  state.colModes = { ...DEFAULT_COL_MODES };
+  state.colModes["proj"] = "fixed";   // 锚定列永远固定
   state.colWidths = {};
   saveColumnConfig();
   saveColumnWidths();
   // 重新渲染弹窗列表（让 UI 与默认状态一致）
   openColumnSettings();
-  // 重新渲染主表格（应用默认列宽 + 默认列集合）
+  // 重新渲染主表格（应用默认列宽 + 默认列集合 + 默认模式）
   applyColumnConfig();
 }
 
@@ -1834,10 +1907,48 @@ function buildColumnSettingRow(key, idx){
     tag.title = "项目名称列用于分组合并，固定为第 1 列且不可隐藏";
   }
 
+  // 模式切换器：固定（可拖拽调宽）/ 自适应（按内容计算）
+  const modeSwitch = document.createElement("div");
+  modeSwitch.className = "mode-switch";
+  const curMode = state.colModes[key] || meta.mode || "auto";
+  // 锚定列：永远固定，禁用切换
+  const switchDisabled = !!meta.anchor;
+  for (const mode of ["fixed", "auto"]){
+    const opt = document.createElement("label");
+    opt.className = "mode-opt" + (mode === curMode ? " active" : "");
+    opt.dataset.mode = mode;
+    opt.title = mode === "fixed"
+      ? "固定列宽：可拖拽表头右侧手柄手动调节"
+      : "自适应列宽：按当前内容自动算列宽";
+    if (switchDisabled) opt.classList.add("disabled");
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = `colmode-${key}`;
+    radio.value = mode;
+    radio.checked = (mode === curMode);
+    radio.disabled = switchDisabled;
+    opt.appendChild(radio);
+    const text = document.createElement("span");
+    text.textContent = mode === "fixed" ? "固定" : "自适应";
+    opt.appendChild(text);
+    opt.addEventListener("click", e => {
+      if (switchDisabled){ e.preventDefault(); return; }
+      if (state.colModes[key] === mode) return;
+      state.colModes[key] = mode;
+      // 更新 group 内的 active 状态
+      modeSwitch.querySelectorAll(".mode-opt").forEach(o => {
+        o.classList.toggle("active", o.dataset.mode === mode);
+      });
+      applyColumnConfig();
+    });
+    modeSwitch.appendChild(opt);
+  }
+
   li.appendChild(handle);
   li.appendChild(cb);
   li.appendChild(label);
   if (tag) li.appendChild(tag);
+  li.appendChild(modeSwitch);
   return li;
 }
 
