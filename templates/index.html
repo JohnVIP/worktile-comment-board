@@ -1432,13 +1432,14 @@ function expandEndpointColumns(){
       autoCount++;
     }
   });
-  const MIN_UPDATED = 90;   // updated 列最小保证宽：能放下 "08-12 14:43" 这种内容
-  const MAX_UPDATED = 110;  // updated 列最大宽：禁止扩展到容器剩余空间 —— default 90 已对齐用户视图需要，
-                            // 端点列扩展留给内容更长的评论；过宽的 updated 会"撑出来一片空白"
+  const MIN_UPDATED = 90;   // updated 列最小保证宽：能放下 "08-12 14:43" 这种内容（窄视窗兜底）
+const MAX_UPDATED = 800;  // updated 列最大宽：极端宽屏下不要把列拉到离谱宽
 
-  if (fixedSum + autoNatural + MAX_UPDATED + overhead <= containerW){
-    // 路径 1：空间充足 → updated 拿最大允许宽（不再吃剩余空间，多余留给列之间留白）
-    actualUpdated = MAX_UPDATED;
+  if (fixedSum + autoNatural + MIN_UPDATED + overhead <= containerW){
+    // 路径 1（默认 / 宽视窗）：空间充足 → updated 吸收容器剩余空间，真正贴到 .proj-block 最右
+    // 这是右端点列"靠最右边"的核心行为，必须保留；视窗越宽，updated 越宽。
+    actualUpdated = Math.floor(containerW - fixedSum - autoNatural - overhead);
+    actualUpdated = Math.max(MIN_UPDATED, Math.min(MAX_UPDATED, actualUpdated));
   } else {
     // 路径 2：auto 列需要压缩才能腾出空间（保证 updated 至少 MIN_UPDATED）
     // fixed 列不参与压缩（保留 user 主动设置，如拖宽 comments）
