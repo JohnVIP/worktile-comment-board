@@ -160,6 +160,40 @@ docker compose up -d
 - ⚠️ 必须在云厂商控制台「安全组 / 防火墙」放行 **TCP 5080** 入站，否则外网连不上。
 - 想要 HTTPS（可选）：在云主机上再跑一个 Caddy / Nginx 反代到 `127.0.0.1:5080`，并把 80/443 也放行。
 
+**增量更新（改完代码后重新部署）**
+
+本地改完代码、确认无误后先提交并推到 GitHub：
+
+```bash
+# 本地
+git add <有改动的文件，例如 templates/index.html wt_client.py app.py>
+git commit -m "描述本次改动"
+git push origin main
+```
+
+再到云主机上拉取最新代码并重建容器：
+
+```bash
+cd /opt/worktile-comment-board
+git pull --ff-only                                   # 拉取最新提交
+docker compose up -d --build                         # 重建镜像并重启容器
+```
+
+> ⚠️ **不要动 `.env` 里的 `FERNET_KEY`**：重建容器不会丢失登录态（密钥固定），但一旦重新生成 `.env` / 改动 `FERNET_KEY`，已保存的加密会话解密失败，用户需重新登录。
+> ⚠️ 前端模板（`templates/index.html`）由 Flask 运行时直接渲染，**无需 `collectstatic` 之类操作**，重建镜像即生效。
+
+分步查看每步输出（排查时用）：
+
+```bash
+cd /opt/worktile-comment-board
+git pull --ff-only
+docker compose build
+docker compose up -d
+docker compose ps              # 确认状态 Up
+docker compose logs -f         # 查看启动日志，确认无报错
+curl -s -o /dev/null -w "%{http_code}" http://localhost:5080/   # 应返回 200
+```
+
 **日常运维**
 
 ```bash
