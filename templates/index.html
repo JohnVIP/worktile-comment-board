@@ -229,6 +229,25 @@
     overflow-wrap: normal; word-break: normal;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  /* 右端点（最后一列"最近更新时间"）的强化视觉：
+     - 加 3px 实色右 border，让"右端点"的边界清晰可见
+     - th 加淡琥珀色背景，与 anchor-tag 标签呼应
+     - 即使内容为空（API 没返回 updated_at）也能一眼看到"右端点"位置 */
+  table.proj-table th:last-child,
+  table.proj-table td:last-child {
+    border-right: 3px solid #f59e0b;
+  }
+  table.proj-table thead th:last-child {
+    background: #fef3c7;
+    background-image: linear-gradient(to right, #f9fafb 0%, #fef3c7 100%);
+  }
+  /* 右端点 anchor-tag 用更显眼的样式 */
+  table.proj-table th:last-child .anchor-tag {
+    background: #fde68a;
+    border-color: #fbbf24;
+    color: #78350f;
+    font-weight: 600;
+  }
   /* 评论列：内容可能很长（多评论+图片），让列内独立横向滚动，不再撑宽整表 */
   table.proj-table td.cell-comments {
     max-width: 600px;
@@ -1696,10 +1715,10 @@ function renderTable(items){
             html += `<td class="cell-comments" data-comments="${escapeHtml(t.task_id)}"${dataMode}${fixStyle}>${commentsHtml}</td>`;
             break;
           case "owner":
-            html += `<td${dataMode}${fixStyle} title="${escapeHtml(t.assignee || "")}">${escapeHtml(t.assignee)}</td>`;
+            html += `<td${dataMode}${fixStyle} title="${escapeHtml(t.assignee || "")}">${escapeHtml(t.assignee || "—")}</td>`;
             break;
           case "updated":
-            html += `<td${dataMode}${fixStyle} title="${escapeHtml(t.updated_at || t.updated_at_str)}">${escapeHtml(t.updated_at_str)}</td>`;
+            html += `<td${dataMode}${fixStyle} title="${escapeHtml(t.updated_at || t.updated_at_str)}">${escapeHtml(t.updated_at_str || "—")}</td>`;
             break;
           case "proj":
             // 非首列的 proj（理论上不会出现，因 anchor 限制，但兜底用每行重复显示）
