@@ -194,24 +194,26 @@
 
   table { width: 100%; border-collapse: collapse; background: var(--panel);
     border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-  /* 项目卡片内的表格：宽度按内容自然撑开，不强制 width:100% 撑满容器。
-     - 自适应 (auto) 列：col 不写 width，white-space:nowrap 让浏览器按内容算列宽
-       并停止——浏览器不会把剩余空间分给这些列。
-     - 固定 (fixed) 列：col 显式 style.width。
-     - 列总宽 ≤ 容器时表格居左、右侧留白（这是"自适应"的本意）；列总宽 > 容器时
-       .proj-block 已设 overflow-x:auto 可横滚兜底。 */
-  table.proj-table { width: auto; table-layout: auto; }
+  /* 项目卡片内的表格：宽度按内容贴合，短列贴短内容、长列贴长内容。
+     - 自适应 (auto) 列：renderTable 后 measureAndFitAutoColumns() 量该列所有 cell 的
+       "内容宽 + padding"（取表头与 body 的较大者），写入 col.style.width 让列宽贴住内容。
+     - 固定 (fixed) 列：col 显式 style.width（用户可拖拽改），不参与测量。
+     - 关键：measureAndFitAutoColumns() 还会把整张表定宽到"各列宽之和"（确定像素宽），
+       让剩余空间 = 0，浏览器不再把容器剩余宽度均摊给 auto 列（否则短 cell 被拉宽）。
+     - 列总宽 ≤ 容器时表格居左、右侧留白；列总宽 > 容器时 .proj-block 已设 overflow-x:auto 横滚。
+     - table-layout:fixed（而非 auto）：auto 模式下浏览器会把"容器-内容"的剩余空间分配
+       给各列（实测 code/owner/updated 被拉到 134/147/160px），fixed + 确定表宽可根治。 */
+  table.proj-table { width: auto; table-layout: fixed; }
   table.proj-table th, table.proj-table td {
     overflow-wrap: anywhere; word-break: break-word;
   }
-  /* 自适应列：保持不换行让列宽紧贴内容；同时给 max-width 兜底避免长内容撑爆整张表。
-     短内容（如 John、08-12 14:43）→ 列宽 = 内容宽度；
-     长内容（如超长任务名）→ 到达 max-width 后 ellipsis 截断。 */
+  /* 自适应列：渲染后 JS 会精确测量每列最长内容 + padding 写入 col.style.width。
+     td 上 white-space:nowrap + overflow:hidden + ellipsis 是兜底 —— 极长内容超
+     测量阈值时截断省略号，不会撑爆列宽。 */
   table.proj-table col[data-mode="auto"],
   table.proj-table th[data-mode="auto"],
   table.proj-table td[data-mode="auto"] {
     white-space: nowrap;
-    max-width: 320px;
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -816,6 +818,111 @@ function applyColumnWidths(){
 
 // 全局拖拽：仅绑定一次（页面生命周期内）
 let _colDrag = null;
+
+/**
+ * 自适应列精确测量 + 定宽 —— 让自适应列严格贴紧"最长内容"，并把整张表定宽到内容总宽，
+ * 从而彻底消除"剩余空间被均摊到各列导致短 cell 被拉宽"的问题。
+ *
+ * 为什么之前一直失败（关键坑，已用真实浏览器实测定位）：
+ *   table-layout:fixed + table{width:auto} 下，表格的"使用宽度" = max(容器宽, 各列宽之和)。
+ *   只要内容总宽 < 容器宽，表格就会撑满容器，多余空间被均摊给 auto 列 ——
+ *   于是 "2" / "John" / "08-12 14:43" 这些短 cell 被拉到 134 / 147 / 160px。
+ *   即便给 col 单独写死 84px 也没用：表格一撑满容器就会重新分配，覆盖掉 col 宽度。
+ *   同时单纯设 width:max-content 在 fixed 布局下也不会生效。
+ *
+ *   ✅ 唯一可靠解：给表格一个【确定的像素宽度 = 各列宽之和】，让剩余空间 = 0，无空间可分配。
+ *
+ * 流程（每张 .proj-table 独立计算）：
+ *   1. 用列几何位置（rect.left/right）匹配每行 td（避开 proj rowspan 导致的下标错位）
+ *   2. 对 auto 列：量取"表头内容宽"与"所有 body cell 内容宽 + padding"的较大者，
+ *      targetW = min(AUTO_COL_MAX_W, ceil(max(headerW, bodyW)))
+ *   3. 写 col.style.width = targetW（fixed 列保持原宽不动）
+ *   4. 按各列"实际渲染宽"（getBoundingClientRect，已含 CSS min-width 兜底）累加，
+ *      写 tbl.style.width = 总和（确定像素宽 → 剩余空间 = 0 → 浏览器不再均摊）
+ */
+const AUTO_COL_MAX_W = 320;   // 自适应列内容上限：超长内容截断省略号，避免撑爆整表
+const AUTO_COL_MIN_W = 60;    // 自适应列最小宽（与 td.cell-id/cell-title 的 CSS min-width 对齐，
+                              // 避免"表宽 < 列宽之和"导致浏览器反向压缩列）
+function measureAndFitAutoColumns(){
+  document.querySelectorAll("#tableArea .proj-table").forEach(tbl => {
+    const cols = tbl.querySelectorAll("colgroup col");
+    if (!cols.length) return;
+    const trs = tbl.querySelectorAll("tbody tr");
+    if (!trs.length) return;
+
+    // 列几何位置（rect.left/right）作为锚点：每个 td 用几何范围匹配自己属于哪一列。
+    // 不能用 td.children[colIdx] —— proj 单元格 rowspan=N 让后续行 children 下标整体前移，
+    // 会导致 title 长串被误算到 code 列头上。
+    const colRects = [...cols].map(c => c.getBoundingClientRect());
+    const ths = tbl.querySelectorAll("thead th");
+
+    // 第一遍：确定每列"目标宽"并记录到 targets[]，同时写入 auto 列宽度。
+    // 注意 fixed 列取既定宽（renderTable / applyColumnWidths 写入的 style.width），
+    // 绝不能读当前 rect —— 那可能是上一次被容器撑开后的宽，会越积越大。
+    const targets = [];
+    cols.forEach((col, colIdx) => {
+      if (col.dataset.mode !== "auto"){
+        let fw = parseFloat(col.style.width);
+        if (!fw || !isFinite(fw)) fw = col.getBoundingClientRect().width;
+        targets[colIdx] = fw;
+        return;
+      }
+      let maxBodyW = 0, maxHeadW = 0;
+      const colX = colRects[colIdx].left;
+      for (const tr of trs){
+        const tds = tr.children;
+        let matchedTd = null;
+        for (const td of tds){
+          if (td.style.display === "none" || td.hidden) continue;
+          const r = td.getBoundingClientRect();
+          // td 的几何范围落在 col 的范围内，即属于此列
+          if (r.left >= colX - 2 && r.right <= colRects[colIdx].right + 2){
+            matchedTd = td;
+            break;
+          }
+        }
+        if (!matchedTd) continue;
+        const range = document.createRange();
+        range.selectNodeContents(matchedTd);
+        const rect = range.getBoundingClientRect();
+        const cs = getComputedStyle(matchedTd);
+        const cellW = rect.width + (parseFloat(cs.paddingLeft)||0) + (parseFloat(cs.paddingRight)||0);
+        if (cellW > maxBodyW) maxBodyW = cellW;
+      }
+      // 表头：逐子节点量内容宽再求和（文本节点 + "自适应"角标 span 等 inline 元素）。
+      // 注意：绝不能用 range.selectNodeContents(th) —— 在表格单元格里它会返回整个 th 的
+      // 盒宽（= 列宽，如 134px）而非文字宽，导致表头测量虚高、整列被撑宽。
+      const th = ths[colIdx];
+      if (th){
+        const range = document.createRange();
+        let headContent = 0;
+        th.childNodes.forEach(n => {
+          if (n.nodeType === 3){
+            if (!n.textContent.trim()) return;
+            range.selectNode(n);
+            headContent += range.getBoundingClientRect().width;
+          } else if (n.nodeType === 1){
+            headContent += n.getBoundingClientRect().width;
+          }
+        });
+        const cs = getComputedStyle(th);
+        maxHeadW = headContent + (parseFloat(cs.paddingLeft)||0) + (parseFloat(cs.paddingRight)||0);
+      }
+      let targetW = Math.min(AUTO_COL_MAX_W, Math.ceil(Math.max(maxBodyW, maxHeadW)));
+      targetW = Math.max(AUTO_COL_MIN_W, targetW);
+      col.style.width = targetW + "px";
+      targets[colIdx] = targetW;
+    });
+
+    // 第二遍：表宽 = 各列"目标宽"之和（确定像素宽，且 == 列宽之和 → 剩余空间 0，
+    // 浏览器不再把容器剩余宽度均摊给 auto 列）。
+    // 关键点：必须从 targets[] 累加，不能读 col.getBoundingClientRect() —— 那时表格仍为旧宽、
+    // 列还处在被容器撑开的状态，读到的会是撑开后的宽，导致表宽虚高、列又被重新分配。
+    let total = 0;
+    targets.forEach(tw => { if (tw) total += tw; });
+    tbl.style.width = Math.ceil(total) + "px";
+  });
+}
 function bindColumnResize(){
   // 用事件委托：任何 col-resizer 的 mousedown 都接管（绑在 document 上，避免依赖元素是否存在）
   document.addEventListener("mousedown", e => {
@@ -1335,6 +1442,12 @@ function renderTable(items){
 
   // 把用户保存的自定义列宽同步到本次渲染出的所有 proj-table 上
   applyColumnWidths();
+
+  // 自适应列：量每列最长 cell 的"内容宽 + padding"（含表头），写入 col.style.width 让列贴内容；
+  // 同时把整张表定宽到"各列宽之和"（确定像素宽 → 剩余空间=0），彻底消除 fixed+auto 下
+  // 浏览器把容器剩余宽度均摊给 auto 列导致的短 cell 被拉宽（实测旧版 code/owner/updated
+  // 被拉到 134/147/160px；修正后约 84/97/110px，紧贴内容）。
+  measureAndFitAutoColumns();
 
   // 搜索命中提示横幅（仅在有搜索关键字时显示）
   const kw = buildSearchKeyword();
