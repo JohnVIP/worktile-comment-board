@@ -404,20 +404,29 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* updated 列豁免上面 auto 兜底规则（auto 模式也允许换行两段显示） */
+  table.proj-table col.cell-updated[data-mode="auto"],
+  table.proj-table td.cell-updated[data-mode="auto"],
+  table.proj-table th.cell-updated[data-mode="auto"] {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
   /* 任务编号/任务名称：通常是短字段，给个最小可见宽度 */
   table.proj-table td.cell-id,
   table.proj-table td.cell-title { min-width: 60px; }
-  /* 任务负责人 / 最近更新时间：时间戳、名字无空格，被 break-word 拆字符后会溢出；
-     改为不拆字符 + 截断省略号，列宽小时显示 ... 而不是内容跑到外面。
-     注意：列顺序可变（默认 proj→code→title→owner→comments→updated），
-     所以这里精确按列 key 命中，绝不能用 nth-last-child(-n+2)，否则会误伤 comments 列
-     （评论列曾被该选择器误判为"倒数第二列"而强制 nowrap，导致超长评论不换行）。 */
+  /* 任务负责人（窄列下不拆字符 + 截断省略号）。
+     updated 列单独走两行渲染（日期 + 时间各一段），不在这里命中。
+     命中规则必须用 .cell-* class，不能用 nth-last-child(-n+2)，否则列序变动时会误伤其他列。 */
   table.proj-table td.cell-owner,
-  table.proj-table th.cell-owner,
-  table.proj-table td.cell-updated,
-  table.proj-table th.cell-updated {
+  table.proj-table th.cell-owner {
     overflow-wrap: normal; word-break: normal;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* updated 列允许换行（窄列下日期/时间拆两行显示），不再 nowrap+ellipsis */
+  table.proj-table td.cell-updated,
+  table.proj-table th.cell-updated {
+    white-space: normal;
   }
   /* 右端点（最后一列）只在视觉上贴右，不再贴粗边、硬色块 —— 用柔和的内边距 + 极淡
      左边线 + 文字右对齐，告诉用户这是右端点，但更克制 */
@@ -566,9 +575,13 @@
     color: var(--accent); text-decoration: none; font-weight: 600;
   }
   td.cell-title a:hover { text-decoration: underline; }
-  /* 最近更新时间：弱化显示 + 等宽数字 */
-  td.cell-updated { color: var(--muted); font-size: var(--fs-xs); }
-  td.cell-updated .updated-time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  /* 最近更新时间：弱化显示 + 等宽数字 + 拆两行（日期 / 时间各一段） */
+  td.cell-updated { color: var(--muted); font-size: var(--fs-xs); line-height: 1.35; }
+  td.cell-updated .updated-date,
+  td.cell-updated .updated-time {
+    display: block;                /* 每段独占一行，避免窄列下被 nowrap + ellipsis 截成 ... */
+    font-variant-numeric: tabular-nums;
+  }
   .muted { color: var(--muted); }
 
   /* ============ 任务负责人：头像 / ghost 未分配 ============ */
@@ -2134,7 +2147,8 @@ function renderTable(items){
           }
           case "updated":
             html += `<td class="cell-updated"${dataMode}${fixStyle} title="${escapeHtml(t.updated_at || t.updated_at_str)}">`
-              + `<span class="updated-time">${escapeHtml(t.updated_at_str || "—")}</span></td>`;
+              + `<span class="updated-date">${escapeHtml(t.updated_date || "—")}</span>`
+              + `<span class="updated-time">${escapeHtml(t.updated_time || "")}</span></td>`;
             break;
           case "proj":
             // 非首列的 proj（理论上不会出现，因 anchor 限制，但兜底用每行重复显示）
