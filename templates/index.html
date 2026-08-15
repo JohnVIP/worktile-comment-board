@@ -266,6 +266,13 @@
     font-size: 11px; line-height: 1.4; color: var(--muted);
     background: #f3f4f6; border-radius: 4px; vertical-align: middle;
   }
+  /* 端点列标签：项目名称（左端点）/ 最近更新时间（右端点），提示这两列固定在两端、不可调整列宽 */
+  table.proj-table .anchor-tag {
+    display: inline-block; margin-left: 6px; padding: 1px 6px;
+    font-size: 11px; line-height: 1.4; color: #92400e;
+    background: #fef3c7; border: 1px solid #fde68a; border-radius: 4px;
+    vertical-align: middle; font-weight: 500;
+  }
   /* 拖拽列宽时全局禁用文字选择、强制手型光标 */
   body.col-resizing, body.col-resizing * {
     cursor: col-resize !important; user-select: none !important;
@@ -693,15 +700,17 @@
 
 <script>
 // ====================== 列定义元数据 ======================
-// 第一列（项目名称）作为分组锚定：永远在第一个、永远可见、不可被其他列拖到前面。
+// 端点锚定：项目名称（最左） + 最近更新时间（最右） 都是端点列 ——
+// 永远在两端、永远可见、不可被其他列拖到中间；端点列不加 resizer，
+// 只有"中间的列"才允许通过拖拽手柄调节列宽。
 // 模式：fixed=固定列宽（可拖拽调节），auto=按内容自适应列宽。
 const COLS_META = [
-  { key: "proj",     label: "项目名称",     width: 96,  anchor: true, mode: "fixed"  },
-  { key: "code",     label: "任务编号",     width: 72,               mode: "auto"   },
-  { key: "title",    label: "任务名称",     width: 180,              mode: "auto"   },
-  { key: "comments", label: "评论",        width: 300,              mode: "fixed"  },
-  { key: "owner",    label: "任务负责人",   width: 80,               mode: "auto"   },
-  { key: "updated",  label: "最近更新时间", width: 110,              mode: "auto"   },
+  { key: "proj",     label: "项目名称",     width: 96,  anchor: true,    mode: "fixed" },
+  { key: "code",     label: "任务编号",     width: 72,                mode: "auto"  },
+  { key: "title",    label: "任务名称",     width: 180,               mode: "auto"  },
+  { key: "comments", label: "评论",        width: 300,               mode: "fixed" },
+  { key: "owner",    label: "任务负责人",   width: 80,                mode: "auto"  },
+  { key: "updated",  label: "最近更新时间", width: 110,  endAnchor: true, mode: "auto" },
 ];
 const DEFAULT_COL_MODES = Object.fromEntries(COLS_META.map(c => [c.key, c.mode]));
 
@@ -783,8 +792,14 @@ function loadColumnConfig(){
       for (const k of DEFAULT_COL_ORDER){
         if (!seen.has(k)){ merged.push(k); seen.add(k); }
       }
-      // 强制 proj 永远在第一位
-      merged.sort((a, b) => a === "proj" ? -1 : (b === "proj" ? 1 : 0));
+      // 强制 proj 永远在第一位，updated 永远在最后一位
+      merged.sort((a, b) => {
+        if (a === "proj") return -1;
+        if (b === "proj") return 1;
+        if (a === "updated") return 1;
+        if (b === "updated") return -1;
+        return 0;
+      });
       state.colOrder = merged;
     }
     if (obj && obj.visible && typeof obj.visible === "object"){
@@ -803,11 +818,13 @@ function loadColumnConfig(){
       }
     }
   } catch(e){ /* localStorage 异常时沿用默认 */ }
-  // 强制锚定列：永远在第一个、永远可见、固定列宽（这是分组合并视觉的硬约束）
-  state.colOrder = state.colOrder.filter(k => k !== "proj").concat(["proj"]);
+  // 强制左端点 proj：永远在第一个、永远可见、固定列宽（这是分组合并视觉的硬约束）
   state.colOrder = ["proj", ...state.colOrder.filter(k => k !== "proj")];
   state.colVisible["proj"] = true;
   state.colModes["proj"] = "fixed";
+  // 强制右端点 updated：永远在最后一位、永远可见（端点对称设计 —— proj 在最左、updated 在最右，中间列才能拖动改变列宽）
+  state.colOrder = [...state.colOrder.filter(k => k !== "updated"), "updated"];
+  state.colVisible["updated"] = true;
 }
 function saveColumnConfig(){
   try {
@@ -1478,7 +1495,7 @@ function renderTable(items){
     const visibleCols = state.colOrder
       .map((key, originalIdx) => {
         const meta = COLS_META.find(m => m.key === key);
-        return { key, label: meta.label, anchor: !!meta.anchor, originalIdx };
+        return { key, label: meta.label, anchor: !!meta.anchor, endAnchor: !!meta.endAnchor, originalIdx };
       })
       .filter(c => state.colVisible[c.key]);
     if (!visibleCols.length){
@@ -1507,20 +1524,25 @@ function renderTable(items){
     });
     colgroupHtml += '</colgroup>';
 
-    // thead：auto 列不加 resizer（自适应列没拖的意义），仅 fixed 列可拖
+    // thead：端点列（anchor/endAnchor）和 auto 列不加 resizer —— 只有"中间的 fixed 列"才允许通过拖拽手柄调节列宽。
     let theadHtml = '<thead><tr>';
     visibleCols.forEach((c, renderIdx) => {
       const isLast = renderIdx === visibleCols.length - 1;
+      const isAnchor = !!c.anchor || !!c.endAnchor;
       const isAuto = state.colModes[c.key] === "auto";
-      // auto 列不渲染 resizer（视觉提示：自适应列没有手动拖拽手柄）
-      const resizer = (isLast || isAuto)
+      // 端点列 + 自适应列都不渲染 resizer；只有"中间且 fixed"列才有拖拽手柄
+      const resizer = (isLast || isAnchor || isAuto)
         ? ''
         : `<span class="col-resizer" data-col="${c.originalIdx}"></span>`;
       // auto 列加一个小角标，提示用户这列是自适应
       const tag = isAuto ? ' <span class="mode-tag" title="此列按内容自适应列宽">自适应</span>' : '';
+      // 端点列加一个角标，提示这是端点不可调整列宽
+      const anchorTag = c.anchor ? ' <span class="anchor-tag" title="左端点列：永远在最左，不可调整列宽">左端点</span>'
+                      : c.endAnchor ? ' <span class="anchor-tag" title="右端点列：永远在最右，不可调整列宽">右端点</span>'
+                      : '';
       // 给 th 标 data-mode，CSS 据此设 white-space:nowrap 让列宽紧贴内容
       const thAttr = isAuto ? ' data-mode="auto"' : '';
-      theadHtml += `<th${thAttr}>${resizer}${escapeHtml(c.label)}${tag}</th>`;
+      theadHtml += `<th${thAttr}>${resizer}${escapeHtml(c.label)}${tag}${anchorTag}</th>`;
     });
     theadHtml += '</tr></thead>';
 
@@ -2160,8 +2182,9 @@ function resetColumnSettings(){
 /** 创建弹窗里的一行（li.col-row）。 */
 function buildColumnSettingRow(key, idx){
   const meta = COLS_META.find(m => m.key === key);
+  const isAnchor = !!meta.anchor || !!meta.endAnchor;
   const li = document.createElement("li");
-  li.className = "col-row" + (meta.anchor ? " anchor" : "");
+  li.className = "col-row" + (isAnchor ? " anchor" : "");
   li.dataset.key = key;
   li.dataset.originalIdx = String(idx);
   if (!state.colVisible[key]) li.classList.add("is-hidden");
@@ -2170,13 +2193,13 @@ function buildColumnSettingRow(key, idx){
   const handle = document.createElement("span");
   handle.className = "drag-handle";
   handle.textContent = "⋮⋮";
-  if (meta.anchor) handle.setAttribute("aria-disabled", "true");
+  if (isAnchor) handle.setAttribute("aria-disabled", "true");
 
   // 复选框（anchor 行 disabled）
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.checked = state.colVisible[key];
-  cb.disabled = !!meta.anchor;
+  cb.disabled = isAnchor;
   cb.addEventListener("change", () => {
     state.colVisible[key] = cb.checked;
     li.classList.toggle("is-hidden", !cb.checked);
@@ -2188,20 +2211,25 @@ function buildColumnSettingRow(key, idx){
   label.className = "col-label";
   label.textContent = meta.label;
 
-  // 锚定标签
-  const tag = meta.anchor ? document.createElement("span") : null;
+  // 端点标签（proj=左端点 / updated=右端点）
+  const tag = isAnchor ? document.createElement("span") : null;
   if (tag){
     tag.className = "col-tag";
-    tag.textContent = "固定";
-    tag.title = "项目名称列用于分组合并，固定为第 1 列且不可隐藏";
+    if (meta.anchor){
+      tag.textContent = "左端点";
+      tag.title = "项目名称列用于分组合并，固定为第 1 列且不可隐藏";
+    } else {  // endAnchor
+      tag.textContent = "右端点";
+      tag.title = "最近更新时间列固定为最后 1 列且不可隐藏";
+    }
   }
 
   // 模式切换器：固定（可拖拽调宽）/ 自适应（按内容计算）
   const modeSwitch = document.createElement("div");
   modeSwitch.className = "mode-switch";
   const curMode = state.colModes[key] || meta.mode || "auto";
-  // 锚定列：永远固定，禁用切换
-  const switchDisabled = !!meta.anchor;
+  // 端点列：禁用切换（避免 auto/fixed 改变后无法重设 resizer 边界）
+  const switchDisabled = isAnchor;
   for (const mode of ["fixed", "auto"]){
     const opt = document.createElement("label");
     opt.className = "mode-opt" + (mode === curMode ? " active" : "");
@@ -2342,8 +2370,8 @@ function bindColumnRowDrag(){
     </header>
     <div class="modal-body">
       <p class="modal-hint">
-        勾选要显示的列；按住 <b>⋮⋮</b> 拖动可调整展示顺序。
-        第一列「项目名称」固定可见且不能调整，作为分组的视觉锚点。
+        勾选要显示的列；按住 <b>⋮⋮</b> 拖动可调整展示顺序。<br>
+        <b>「项目名称」</b>与<b>「最近更新时间」</b>分别是左/右端点列，固定可见且不可调整；中间列可拖动手柄改变列宽。
       </p>
       <ul class="cols-list" id="colSettingsList"></ul>
     </div>
