@@ -29,8 +29,9 @@
     font-size: 14px;
     line-height: 1.5;
   }
-  .wrap { width: 1200px; max-width: calc(100vw - 0px); margin: 0 auto; padding: 24px;
-    overflow-x: auto; }   /* 视区 < 1200 时 wrap 自身横滚，proj-block 永远不溢出 */
+  .wrap { width: auto; max-width: calc(100vw - 32px); margin: 0 auto; padding: 24px;
+    overflow-x: auto; }   /* 取消固定 width：表格按内容自然撑开后，wrap 跟着表格走，
+                              但不超过视窗（-32px 留滚动条空位）；视窗 < 表格总宽时 wrap 自身横滚 */
 
   /* ---------- 登录页 ---------- */
   .login-card {
@@ -193,19 +194,30 @@
 
   table { width: 100%; border-collapse: collapse; background: var(--panel);
     border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-  /* 项目卡片内的表格：默认 table-layout: auto 让浏览器按内容自适应分配列宽。
-   auto 列按内容算、fixed 列按 col.width 算；列总宽 ≤ 容器时不会溢出。
-   .proj-block 已设 overflow-x:auto，溢出时可横滚。 */
-  table.proj-table { width: 100%; table-layout: auto; }
+  /* 项目卡片内的表格：宽度按内容自然撑开，不强制 width:100% 撑满容器。
+     - 自适应 (auto) 列：col 不写 width，white-space:nowrap 让浏览器按内容算列宽
+       并停止——浏览器不会把剩余空间分给这些列。
+     - 固定 (fixed) 列：col 显式 style.width。
+     - 列总宽 ≤ 容器时表格居左、右侧留白（这是"自适应"的本意）；列总宽 > 容器时
+       .proj-block 已设 overflow-x:auto 可横滚兜底。 */
+  table.proj-table { width: auto; table-layout: auto; }
   table.proj-table th, table.proj-table td {
     overflow-wrap: anywhere; word-break: break-word;
   }
-  /* 拖拽调节列宽期间临时切到 fixed，避免拖动过程浏览器重新算列宽导致跳变 */
-  table.proj-table.col-dragging { table-layout: fixed; }
-  /* 任务编号/任务名称/任务负责人/更新时间：通常是短字段，给个最小可见宽度 */
+  /* 自适应列：保持不换行让列宽紧贴内容；同时给 max-width 兜底避免长内容撑爆整张表。
+     短内容（如 John、08-12 14:43）→ 列宽 = 内容宽度；
+     长内容（如超长任务名）→ 到达 max-width 后 ellipsis 截断。 */
+  table.proj-table col[data-mode="auto"],
+  table.proj-table th[data-mode="auto"],
+  table.proj-table td[data-mode="auto"] {
+    white-space: nowrap;
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* 任务编号/任务名称：通常是短字段，给个最小可见宽度 */
   table.proj-table td.cell-id,
-  table.proj-table td.cell-title,
-  table.proj-table td:not([class]) { min-width: 60px; }
+  table.proj-table td.cell-title { min-width: 60px; }
   /* 最后两列（任务负责人、最近更新时间）：时间戳/名字无空格，被 break-word 拆字符后会溢出；
      改为不拆字符 + 截断省略号，列宽小时显示 ... 而不是内容跑到外面。 */
   table.proj-table td:nth-last-child(-n+2),
@@ -272,9 +284,10 @@
        支持不完善，会让同一列的合并单元格错位呈现"嵌套"假象 */
   }
   td.proj-cell .proj-name {
-    /* 让长项目名在 160px 列内自动换行，不会撑爆单元格 */
+    /* 中文按词换行（word-break: keep-all），英文才拆字符。
+       默认 break-all 会让「熟悉项目应用」被强拆成「熟/悉/项/目/应/用」。 */
     overflow-wrap: anywhere;
-    word-break: break-all;
+    word-break: keep-all;
     display: block;
   }
   td.proj-cell .proj-count {
@@ -824,15 +837,16 @@ function bindColumnResize(){
     };
     hand.classList.add("dragging");
     document.body.classList.add("col-resizing");
-    // 拖拽期间临时切到 table-layout:fixed，避免 table-layout:auto 下浏览器按内容重算导致跳变
-    table.classList.add("col-dragging");
+    // 拖拽手柄仅在 fixed 列渲染；拖拽期间 table-layout 保持 auto，浏览器会自动跟随。
+    // 如需防跳变：在 mousemove 里直接同步 col.style.width，浏览器会按当前 width 排队重算。
   });
   document.addEventListener("mousemove", e => {
     if (!_colDrag) return;
     const dx = e.clientX - _colDrag.startX;
     const newW = Math.max(40, Math.round(_colDrag.startW + dx));
     state.colWidths[_colDrag.originalIdx] = newW;
-    // 同步到所有表格的对应 col（按 data-col 原始下标定位）
+    // 同步到所有表格的对应 col（按 data-col 原始下标定位）。
+    // table-layout:auto 下浏览器按 col width + 内容算列宽，写 width 后立即生效。
     document.querySelectorAll(`#tableArea .proj-table colgroup col[data-col="${_colDrag.originalIdx}"]`)
       .forEach(c => { c.style.width = newW + "px"; });
   });
@@ -840,7 +854,6 @@ function bindColumnResize(){
     if (!_colDrag) return;
     _colDrag.hand.classList.remove("dragging");
     document.body.classList.remove("col-resizing");
-    if (_colDrag.table) _colDrag.table.classList.remove("col-dragging");
     saveColumnWidths();
     _colDrag = null;
   });
@@ -1247,7 +1260,9 @@ function renderTable(items){
         : `<span class="col-resizer" data-col="${c.originalIdx}"></span>`;
       // auto 列加一个小角标，提示用户这列是自适应
       const tag = isAuto ? ' <span class="mode-tag" title="此列按内容自适应列宽">自适应</span>' : '';
-      theadHtml += `<th>${resizer}${escapeHtml(c.label)}${tag}</th>`;
+      // 给 th 标 data-mode，CSS 据此设 white-space:nowrap 让列宽紧贴内容
+      const thAttr = isAuto ? ' data-mode="auto"' : '';
+      theadHtml += `<th${thAttr}>${resizer}${escapeHtml(c.label)}${tag}</th>`;
     });
     theadHtml += '</tr></thead>';
 
@@ -1272,33 +1287,43 @@ function renderTable(items){
         if (anchorFirst && c.key === "proj"){
           // 分组合并的"项目名称"列：仅 idx===0 写一次
           if (idx === 0){
-            html += `<td class="proj-cell" rowspan="${groupLen}">`
+            // 项目名称默认 fixed 96，强制固定列宽（避免被 auto 列挤压）
+            const projW = DEFAULT_COL_WIDTHS.proj;
+            html += `<td class="proj-cell" rowspan="${groupLen}" style="min-width:${projW}px; max-width:${projW}px">`
               + `<span class="proj-name">${escapeHtml(g.name)}</span>`
               + `<span class="proj-count">共 ${groupLen} 条</span>`
               + '</td>';
           }
           return;
         }
+        // 自适应列加 data-mode="auto"，CSS 据此设 white-space:nowrap 让列宽紧贴内容
+        const dataMode = state.colModes[c.key] === "auto" ? ' data-mode="auto"' : '';
+        // 固定列：在每个 td 写内联 min-width/max-width，让 table-layout:auto 下也能真固定
+        // （否则浏览器按内容把 fixed 列也压成内容宽度，fixed 就名存实亡了）
+        const fixedW = state.colWidths[c.originalIdx] || DEFAULT_COL_WIDTHS[c.key];
+        const fixStyle = state.colModes[c.key] === "fixed"
+          ? ` style="min-width:${fixedW}px; max-width:${fixedW}px"`
+          : '';
         // 普通 td 渲染（按 key 分发）
         switch (c.key){
           case "code":
-            html += `<td class="cell-id">${escapeHtml(t.identifier || "-")}</td>`;
+            html += `<td class="cell-id"${dataMode}${fixStyle}>${escapeHtml(t.identifier || "-")}</td>`;
             break;
           case "title":
-            html += `<td class="cell-title">${buildTaskTitle(t)}</td>`;
+            html += `<td class="cell-title"${dataMode}${fixStyle}>${buildTaskTitle(t)}</td>`;
             break;
           case "comments":
-            html += `<td class="cell-comments" data-comments="${escapeHtml(t.task_id)}">${commentsHtml}</td>`;
+            html += `<td class="cell-comments" data-comments="${escapeHtml(t.task_id)}"${dataMode}${fixStyle}>${commentsHtml}</td>`;
             break;
           case "owner":
-            html += `<td title="${escapeHtml(t.assignee || "")}">${escapeHtml(t.assignee)}</td>`;
+            html += `<td${dataMode}${fixStyle} title="${escapeHtml(t.assignee || "")}">${escapeHtml(t.assignee)}</td>`;
             break;
           case "updated":
-            html += `<td title="${escapeHtml(t.updated_at || t.updated_at_str)}">${escapeHtml(t.updated_at_str)}</td>`;
+            html += `<td${dataMode}${fixStyle} title="${escapeHtml(t.updated_at || t.updated_at_str)}">${escapeHtml(t.updated_at_str)}</td>`;
             break;
           case "proj":
             // 非首列的 proj（理论上不会出现，因 anchor 限制，但兜底用每行重复显示）
-            html += `<td class="proj-cell-inline"><span class="proj-name">${escapeHtml(g.name)}</span></td>`;
+            html += `<td class="proj-cell-inline"${dataMode}${fixStyle}><span class="proj-name">${escapeHtml(g.name)}</span></td>`;
             break;
         }
       });
