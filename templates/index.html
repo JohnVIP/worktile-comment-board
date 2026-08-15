@@ -993,6 +993,76 @@ function measureAndFitAutoColumns(){
     tbl.style.width = Math.ceil(total) + "px";
   });
 }
+function expandEndpointColumns(){
+  // 端点列扩展：让"最近更新时间"(endAnchor 右端点)自动吸收容器剩余空间，
+  // 使其真正贴在 proj-block 的最右边缘，而不是停在表格内的最后位置（表格右边
+  // 到容器右边还有大段空白，看起来"没到最右边"）。
+  //
+  // 实现：拿到所有 proj-block 容器的 clientWidth（取最小以兼容不同宽度布局），
+  //      计算除 updated 外的 otherSum，让 updated 列目标宽 = containerW - otherSum。
+  // 边界：[60, 800] —— 太小保证能读，太大防窄容器下被撑出。
+  const updatedIdx = state.colOrder.indexOf("updated");
+  if (updatedIdx < 0) return;
+  const tables = [...document.querySelectorAll("#tableArea .proj-table")];
+  if (!tables.length) return;
+
+  const blocks = document.querySelectorAll("#tableArea .proj-block");
+  let containerW = Infinity;
+  blocks.forEach(b => { const w = b.clientWidth; if (w && w < containerW) containerW = w; });
+  if (!isFinite(containerW) || containerW < 200) return;
+
+  // 找 updated 列在第一张表里的 colWidth（已经在 measureAndFitAutoColumns 里写过）
+  const sample = tables[0];
+  const cols = sample.querySelectorAll("colgroup col");
+  // updated 永远在最后一位（endAnchor 强制），所以它的 renderIdx === colCount - 1
+  if (cols.length < 2) return;
+  const updatedRenderIdx = cols.length - 1;
+
+  let otherSum = 0;
+  cols.forEach((c, i) => {
+    if (i === updatedRenderIdx) return;
+    let w = parseFloat(c.style.width);
+    if (!w || !isFinite(w)) w = c.getBoundingClientRect().width || 0;
+    otherSum += w;
+  });
+
+  // 减 4px 预留：border、列间隙等小开销
+  const overhead = 4;
+  // 双向夹紧：user 拖宽中间列时 updated 应被压缩（不能溢出容器），
+  //           正常情况下应被扩展到容器壁。clamp 到 [60, 800]。
+  const wantW = Math.max(60, Math.min(800, Math.floor(containerW - otherSum - overhead)));
+
+  // 同步写到所有表，并更新 tbl.style.width 让表格撑满容器
+  let actualW = wantW;
+  tables.forEach(tbl => {
+    const c = tbl.querySelectorAll("colgroup col")[updatedRenderIdx];
+    if (!c) return;
+    c.style.width = actualW + "px";
+  });
+  // 重新计算 totalW → tbl.style.width
+  tables.forEach(tbl => {
+    let total = 0;
+    tbl.querySelectorAll("colgroup col").forEach(c => {
+      let w = parseFloat(c.style.width);
+      if (!w || !isFinite(w)) w = c.getBoundingClientRect().width || 0;
+      total += w;
+    });
+    // 如果还有余量（sum < containerW），把余量全部加到 updated 让表格真贴边
+    let remainder = containerW - Math.ceil(total) - overhead;
+    if (remainder > 0){
+      const lastCol = tbl.querySelectorAll("colgroup col")[updatedRenderIdx];
+      if (lastCol){
+        const addOn = Math.min(remainder, 800 - actualW);
+        if (addOn > 0){
+          actualW += addOn;
+          lastCol.style.width = actualW + "px";
+          total = containerW - overhead;
+        }
+      }
+    }
+    tbl.style.width = Math.ceil(total) + "px";
+  });
+}
 function bindColumnResize(){
   // 用事件委托：任何 col-resizer 的 mousedown 都接管（绑在 document 上，避免依赖元素是否存在）
   document.addEventListener("mousedown", e => {
@@ -1621,6 +1691,9 @@ function renderTable(items){
   // 浏览器把容器剩余宽度均摊给 auto 列导致的短 cell 被拉宽（实测旧版 code/owner/updated
   // 被拉到 134/147/160px；修正后约 84/97/110px，紧贴内容）。
   measureAndFitAutoColumns();
+
+  // 端点列扩展：让右端点"最近更新时间"自动填满容器剩余空间，真正贴到容器最右边
+  expandEndpointColumns();
 
   // 搜索命中提示横幅（仅在有搜索关键字时显示）
   const kw = buildSearchKeyword();
