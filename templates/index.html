@@ -448,11 +448,14 @@
   .hidden { display: none; }
 
   /* ============== 列设置弹窗 ============== */
-  .col-modal-mask {
+  /* 用 :not(.hidden) 而非默认 flex：保证 .hidden { display:none } 真的能隐藏弹窗。
+     否则 .col-modal-mask 与 .hidden 同优先级，后定义的 flex 会覆盖 none。 */
+  .col-modal-mask:not(.hidden) {
     position: fixed; inset: 0; z-index: 5000;
     background: rgba(15, 23, 42, 0.42);
     display: flex; align-items: center; justify-content: center;
   }
+  .col-modal-mask.hidden { display: none; }
   .col-modal {
     width: 460px; max-width: calc(100vw - 32px);
     background: var(--panel); border-radius: 12px;
