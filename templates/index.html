@@ -290,12 +290,6 @@
   }
   table.proj-table .col-resizer:hover::after,
   table.proj-table .col-resizer.dragging::after { background: var(--accent); }
-  /* 自适应列标签：表头右侧小角标，让用户知道这列是按内容自适应（不可拖拽） */
-  table.proj-table .mode-tag {
-    display: inline-block; margin-left: 6px; padding: 1px 6px;
-    font-size: 11px; line-height: 1.4; color: var(--muted);
-    background: #f3f4f6; border-radius: 4px; vertical-align: middle;
-  }
   /* 端点列标签：项目名称（左端点）/ 最近更新时间（右端点），提示这两列固定在两端、不可调整列宽 */
   table.proj-table .anchor-tag {
     display: inline-block; margin-left: 6px; padding: 1px 6px;
@@ -976,7 +970,7 @@ function measureAndFitAutoColumns(){
         const cellW = rect.width + (parseFloat(cs.paddingLeft)||0) + (parseFloat(cs.paddingRight)||0);
         if (cellW > maxBodyW) maxBodyW = cellW;
       }
-      // 表头：逐子节点量内容宽再求和（文本节点 + "自适应"角标 span 等 inline 元素）。
+      // 表头：逐子节点量内容宽再求和（文本节点 + 端点角标 span 等 inline 元素）。
       // 注意：绝不能用 range.selectNodeContents(th) —— 在表格单元格里它会返回整个 th 的
       // 盒宽（= 列宽，如 134px）而非文字宽，导致表头测量虚高、整列被撑宽。
       const th = ths[colIdx];
@@ -1677,8 +1671,6 @@ function renderTable(items){
       const resizer = isMiddleFixed
         ? `<span class="col-resizer" data-col="${c.originalIdx}"></span>`
         : '';
-      // auto 列加一个小角标，提示用户这列是自适应（右端点列不再展示，因为它实质是"吸收容器剩余空间"，不是真正的 auto）
-      const tag = (isAuto && !c.endAnchor) ? ' <span class="mode-tag" title="此列按内容自适应列宽">自适应</span>' : '';
       // 端点列加一个角标，提示这是端点不可调整列宽
       const anchorTag = c.anchor ? ' <span class="anchor-tag" title="左端点列：永远在最左，不可调整列宽">左端点</span>'
                       : c.endAnchor ? ' <span class="anchor-tag" title="右端点列：永远在最右，不可调整列宽">右端点</span>'
@@ -1688,8 +1680,8 @@ function renderTable(items){
       const thAttr = (isAuto ? ' data-mode="auto"' : '') + (c.endAnchor ? ' data-endanchor="1"' : '');
       const labelHtml = escapeHtml(c.label);
       theadHtml += c.endAnchor
-        ? `<th${thAttr}>${resizer}${anchorTag}${tag}${labelHtml}</th>`
-        : `<th${thAttr}>${resizer}${labelHtml}${tag}${anchorTag}</th>`;
+        ? `<th${thAttr}>${resizer}${anchorTag}${labelHtml}</th>`
+        : `<th${thAttr}>${resizer}${labelHtml}${anchorTag}</th>`;
     });
     theadHtml += '</tr></thead>';
 
