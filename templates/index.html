@@ -446,6 +446,94 @@
     background: var(--accent-soft); border-color: var(--accent);
   }
   .hidden { display: none; }
+
+  /* ============== 列设置弹窗 ============== */
+  .col-modal-mask {
+    position: fixed; inset: 0; z-index: 5000;
+    background: rgba(15, 23, 42, 0.42);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .col-modal {
+    width: 460px; max-width: calc(100vw - 32px);
+    background: var(--panel); border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.25);
+    overflow: hidden; animation: colModalIn 0.18s ease-out;
+  }
+  @keyframes colModalIn { from { transform: translateY(-8px); opacity: 0 } to { transform: none; opacity: 1 } }
+  .col-modal header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+    background: #f8fafc;
+  }
+  .col-modal header h3 { margin: 0; font-size: 16px; }
+  .col-modal header .x {
+    border: none; background: transparent; color: var(--muted);
+    font-size: 20px; line-height: 1; padding: 4px 8px; border-radius: 6px;
+    cursor: pointer;
+  }
+  .col-modal header .x:hover { background: #eef2f7; color: var(--text); }
+  .col-modal .modal-body { padding: 14px 20px 8px; }
+  .col-modal .modal-hint {
+    font-size: 12.5px; color: var(--muted); margin: 0 0 12px; line-height: 1.6;
+  }
+  .col-modal .cols-list { list-style: none; padding: 0; margin: 0; }
+  .col-modal .col-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; margin-bottom: 6px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: #fff; transition: border-color .12s, background .12s, box-shadow .12s;
+    user-select: none;
+  }
+  .col-modal .col-row:hover { border-color: #c7d2fe; }
+  .col-modal .col-row.dragging {
+    opacity: 0.5; border-style: dashed;
+  }
+  .col-modal .col-row.drag-over-top { box-shadow: 0 -2px 0 0 var(--accent) inset; }
+  .col-modal .col-row.drag-over-bot { box-shadow: 0 2px 0 0 var(--accent) inset; }
+  .col-modal .col-row.is-hidden { background: #f8fafc; color: var(--muted); }
+  .col-modal .col-row .drag-handle {
+    color: #94a3b8; font-size: 14px; line-height: 1;
+    cursor: grab; padding: 0 2px; letter-spacing: -2px;
+  }
+  .col-modal .col-row.anchor .drag-handle {
+    cursor: not-allowed; color: #cbd5e1;
+  }
+  .col-modal .col-row .drag-handle:active { cursor: grabbing; }
+  .col-modal .col-row input[type=checkbox] {
+    width: 16px; height: 16px; cursor: pointer;
+    accent-color: var(--accent);
+  }
+  .col-modal .col-row input[type=checkbox]:disabled { cursor: not-allowed; opacity: .6; }
+  .col-modal .col-row .col-label {
+    flex: 1; font-size: 14px; font-weight: 500;
+  }
+  .col-modal .col-row .col-tag {
+    font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
+    background: #fef3c7; color: #92400e; border: 1px solid #fde68a;
+  }
+  .col-modal .col-row.anchor { background: #fffbeb; border-color: #fde68a; }
+  .col-modal footer {
+    display: flex; justify-content: space-between; gap: 12px;
+    padding: 14px 20px; border-top: 1px solid var(--border);
+    background: #f8fafc;
+  }
+  .col-modal footer .left { display: flex; gap: 8px; }
+  .col-modal footer .right { display: flex; gap: 8px; }
+  .col-modal .btn-text {
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--border); padding: 7px 14px;
+    font-size: 13px;
+  }
+  .col-modal .btn-text:hover { background: #f1f5f9; color: var(--text); }
+  /* 列设置触发按钮（toolbar 内） */
+  .col-settings-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 7px 12px !important; font-size: 13.5px !important;
+    background: #fff !important; color: var(--text) !important;
+    border: 1px solid var(--border) !important; font-weight: 500 !important;
+  }
+  .col-settings-btn:hover { border-color: var(--accent) !important; color: var(--accent) !important; }
+  .col-settings-btn svg { width: 14px; height: 14px; }
 </style>
 </head>
 <body>
@@ -514,6 +602,10 @@
         </div>
       </div>
       <button id="refreshBtn" class="btn-ghost" onclick="refreshAll()" title="重新拉取任务列表与评论">刷新</button>
+      <button id="colSettingsBtn" class="col-settings-btn" onclick="openColumnSettings()" title="自定义列显示与展示顺序">
+        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M11.49 2.26c.41-.69 1.36-.82 1.93-.31l.05.05.93.93a1.24 1.24 0 0 1 .33 1.31l-.19.55a.62.62 0 0 0 .16.62l.43.43a.62.62 0 0 0 .62.16l.55-.19a1.24 1.24 0 0 1 1.31.33l.05.05.93.93c.51.57.36 1.52-.33 1.93l-.5.31a.62.62 0 0 0-.27.6l.05.57a.62.62 0 0 0 .46.51l.57.13c.74.17 1.1.99.74 1.66l-.43.79c-.36.67-1.23.83-1.78.33l-.43-.39a.62.62 0 0 0-.66-.09l-.52.23a.62.62 0 0 0-.37.55v.58c0 .77-.7 1.34-1.45 1.18l-.87-.19a1.21 1.21 0 0 1-.93-1.18v-.55a.62.62 0 0 0-.32-.53l-.49-.27a.62.62 0 0 0-.66.05l-.42.32c-.58.44-1.41.25-1.71-.4l-.34-.78c-.3-.65.05-1.42.74-1.59l.55-.13a.62.62 0 0 0 .46-.51l.03-.55a.62.62 0 0 0-.27-.57l-.46-.31c-.6-.4-.71-1.22-.23-1.74Z"/><circle cx="14.5" cy="14.5" r="3.2" fill="#fff"/><circle cx="14.5" cy="14.5" r="2.4"/></svg>
+        列设置
+      </button>
     </div>
 
     <div id="tableArea"></div>
@@ -524,6 +616,22 @@
 </div>
 
 <script>
+// ====================== 列定义元数据 ======================
+// 第一列（项目名称）作为分组锚定：永远在第一个、永远可见、不可被其他列拖到前面。
+const COLS_META = [
+  { key: "proj",     label: "项目名称",     width: 96,  anchor: true  },
+  { key: "code",     label: "任务编号",     width: 72               },
+  { key: "title",    label: "任务名称",     width: 180              },
+  { key: "comments", label: "评论",        width: 380              },
+  { key: "owner",    label: "任务负责人",   width: 80               },
+  { key: "updated",  label: "最近更新时间", width: 110              },
+];
+
+const COLUMN_CONFIG_KEY = "wt-board:column-config:v1";   // 存 { order: [...], visible: {...} }
+const COL_WIDTHS_KEY    = "wt-board:col-widths:v2";      // 沿用 v2 键；索引按渲染时的当前 col 下标
+const DEFAULT_COL_ORDER = COLS_META.map(c => c.key);
+const DEFAULT_COL_WIDTHS = Object.fromEntries(COLS_META.map(c => [c.key, c.width]));
+
 const state = {
   projectId: "__all__",
   projectName: "全部项目",
@@ -544,11 +652,13 @@ const state = {
   hasMore: false,
   expanded: new Set(),
   commentsCache: {},   // taskId -> comments array
-  colWidths: {},       // 用户自定义列宽（col index -> px），来自 localStorage
+  colWidths: {},       // 用户自定义列宽（按当前渲染顺序的 col index -> px），来自 localStorage
+  colOrder: [...DEFAULT_COL_ORDER],            // 当前列展示顺序（proj 始终在 [0]）
+  colVisible: Object.fromEntries(COLS_META.map(c => [c.key, true])),  // 每列显隐
 };
 
 // =================== 列宽拖拽调节 ===================
-const COL_WIDTHS_KEY = "wt-board:col-widths:v2";  // v2: 改 px 默认值，总宽 ≤ 容器宽
+// 注：COL_WIDTHS_KEY 已在 COLS_META 块顶部声明（line 631），避免重复声明。
 
 function loadColumnWidths(){
   try {
@@ -564,15 +674,71 @@ function saveColumnWidths(){
   catch(e){}
 }
 
+// =================== 列配置：显示哪些列、按什么顺序 ===================
+/** 从 localStorage 恢复列配置；任何字段缺失/非法都回退默认；保证 proj 始终 [0] + 可见。 */
+function loadColumnConfig(){
+  try {
+    const raw = localStorage.getItem(COLUMN_CONFIG_KEY);
+    if (!raw) return;
+    const obj = JSON.parse(raw);
+    if (obj && Array.isArray(obj.order)){
+      // 与 DEFAULT_COL_ORDER 求并集、按用户顺序 + 默认补漏，剔除未知 key
+      const seen = new Set();
+      const merged = [];
+      for (const k of obj.order){
+        if (typeof k === "string" && COLS_META.some(c => c.key === k) && !seen.has(k)){
+          merged.push(k); seen.add(k);
+        }
+      }
+      for (const k of DEFAULT_COL_ORDER){
+        if (!seen.has(k)){ merged.push(k); seen.add(k); }
+      }
+      // 强制 proj 永远在第一位
+      merged.sort((a, b) => a === "proj" ? -1 : (b === "proj" ? 1 : 0));
+      state.colOrder = merged;
+    }
+    if (obj && obj.visible && typeof obj.visible === "object"){
+      for (const c of COLS_META){
+        if (typeof obj.visible[c.key] === "boolean"){
+          state.colVisible[c.key] = obj.visible[c.key];
+        }
+      }
+    }
+  } catch(e){ /* localStorage 异常时沿用默认 */ }
+  // 强制锚定列：永远在第一个、永远可见（这是分组合并视觉的硬约束）
+  state.colOrder = state.colOrder.filter(k => k !== "proj").concat(["proj"]);
+  state.colOrder = ["proj", ...state.colOrder.filter(k => k !== "proj")];
+  state.colVisible["proj"] = true;
+}
+function saveColumnConfig(){
+  try {
+    localStorage.setItem(COLUMN_CONFIG_KEY, JSON.stringify({
+      order: state.colOrder,
+      visible: state.colVisible
+    }));
+  } catch(e){}
+}
+/** 弹窗变更后调用：持久化 + 重渲染当前页（不重新拉数据）。 */
+function applyColumnConfig(){
+  saveColumnConfig();
+  // 重新触发渲染：用当前 items 渲染一次（性能可接受，因为评论都在 cache 里）
+  if (state.lastItems) renderTable(state.lastItems);
+}
+
 // 把 state.colWidths 应用到当前页面所有 .proj-table 的 colgroup 上
+//   - widths 索引是"原始下标"（renderTable 中 col 上的 data-col），与列顺序解耦
+//   - 只有当 col 上声明了 data-col 时才覆盖，避免影响未受影响的列
 function applyColumnWidths(){
   const widths = state.colWidths || {};
   const keys = Object.keys(widths);
   if (!keys.length) return;
   document.querySelectorAll("#tableArea .proj-table").forEach(tbl => {
     const cols = tbl.querySelectorAll("colgroup col");
-    cols.forEach((c, i) => {
-      if (widths[i] != null) c.style.width = widths[i] + "px";
+    cols.forEach((c) => {
+      const idx = parseInt(c.dataset.col, 10);
+      if (Number.isFinite(idx) && widths[idx] != null){
+        c.style.width = widths[idx] + "px";
+      }
     });
   });
 }
@@ -585,13 +751,14 @@ function bindColumnResize(){
     const hand = e.target.closest && e.target.closest(".col-resizer");
     if (!hand) return;
     e.preventDefault();
-    const colIdx = parseInt(hand.dataset.col, 10);
+    const originalIdx = parseInt(hand.dataset.col, 10);
+    if (!Number.isFinite(originalIdx)) return;
     const table = hand.closest("table");
     if (!table) return;
-    const col = table.querySelector(`colgroup col:nth-child(${colIdx + 1})`);
+    const col = table.querySelector(`colgroup col[data-col="${originalIdx}"]`);
     if (!col) return;
     _colDrag = {
-      colIdx,
+      originalIdx,
       startX: e.clientX,
       startW: col.getBoundingClientRect().width,
       hand
@@ -603,9 +770,9 @@ function bindColumnResize(){
     if (!_colDrag) return;
     const dx = e.clientX - _colDrag.startX;
     const newW = Math.max(40, Math.round(_colDrag.startW + dx));
-    state.colWidths[_colDrag.colIdx] = newW;
-    // 同步到所有表格的对应 col
-    document.querySelectorAll(`#tableArea .proj-table colgroup col:nth-child(${_colDrag.colIdx + 1})`)
+    state.colWidths[_colDrag.originalIdx] = newW;
+    // 同步到所有表格的对应 col（按 data-col 原始下标定位）
+    document.querySelectorAll(`#tableArea .proj-table colgroup col[data-col="${_colDrag.originalIdx}"]`)
       .forEach(c => { c.style.width = newW + "px"; });
   });
   document.addEventListener("mouseup", () => {
@@ -884,7 +1051,8 @@ async function loadTasks(){
     const data = await api(url);
     state.total = data.total;
     state.hasMore = data.has_more;
-    renderTable(data.items || []);
+    state.lastItems = data.items || [];     // 缓存一份，供「列设置变更后本地重渲」使用
+    renderTable(state.lastItems);
     renderPager();
   } catch(e){
     area.innerHTML = `<div class="alert">${escapeHtml(e.message)}</div>`;
@@ -971,32 +1139,51 @@ function renderTable(items){
     // 任务数 * 2 = 该表总行数（任务行 + 评论明细行），作为 proj 单元格的 rowspan
     const span = g.tasks.length * 2;
     html += '<div class="proj-block">';
-    // 统一的列宽定义：所有项目卡片共用同一套宽度，保证卡片间列宽一致
-    // table-layout: fixed 会让 td 服从这里声明的列宽（不被内容撑爆）
-    html += '<table class="proj-table">'
-      + '<colgroup>'
-      +   '<col style="width:96px">'      <!-- 项目名称（合并单元格） -->
-      +   '<col style="width:72px">'      <!-- 任务编号 -->
-      +   '<col style="width:180px">'     <!-- 任务名称 -->
-      +   '<col style="width:380px">'     <!-- 评论：挪到任务名后面，给最大列宽 -->
-      +   '<col style="width:80px">'      <!-- 任务负责人 -->
-      +   '<col style="width:110px">'     <!-- 最近更新时间 -->
-      + '</colgroup>'
-      + '<thead><tr>'
-      + '<th><span class="col-resizer" data-col="0"></span>项目名称</th>'
-      + '<th><span class="col-resizer" data-col="1"></span>任务编号</th>'
-      + '<th><span class="col-resizer" data-col="2"></span>任务名称</th>'
-      + '<th><span class="col-resizer" data-col="3"></span>评论</th>'
-      + '<th><span class="col-resizer" data-col="4"></span>任务负责人</th>'
-      + '<th>最近更新时间</th>'
-      + '</tr></thead><tbody>';
+    // ====== 列定义：按 state.colOrder 顺序 + colVisible 过滤后的可见列 ======
+    // 注意：可见列中第一列若是 "proj"（分组锚定列），则用 rowspan 合并单元格；
+    //     若用户隐藏了 proj，则按"每行重复显示项目名"的方式降级渲染，保持 .proj-block 分组卡片仍在。
+    const visibleCols = state.colOrder
+      .map((key, originalIdx) => {
+        const meta = COLS_META.find(m => m.key === key);
+        return { key, label: meta.label, anchor: !!meta.anchor, originalIdx };
+      })
+      .filter(c => state.colVisible[c.key]);
+    if (!visibleCols.length){
+      // 兜底：万一全隐藏了，至少保留"任务编号"列
+      visibleCols.push({ key: "code", label: "任务编号", anchor: false, originalIdx: 1 });
+      state.colVisible.code = true;
+    }
+    const groupLen = g.tasks.length;
+
+    // colgroup：每个 col 用 data-col 存"原始下标"，与 state.colWidths 索引对齐；
+    //           这样用户拖动列宽后，即使重排列顺序也不会丢失自定义宽度。
+    let colgroupHtml = '<colgroup>';
+    visibleCols.forEach((c, renderIdx) => {
+      const defW = DEFAULT_COL_WIDTHS[c.key];
+      const customW = state.colWidths[c.originalIdx];
+      const w = customW || defW;
+      colgroupHtml += `<col data-col="${c.originalIdx}" style="width:${w}px">`;
+    });
+    colgroupHtml += '</colgroup>';
+
+    // thead：最后一列不加 resizer（没必要再多一根竖线）
+    let theadHtml = '<thead><tr>';
+    visibleCols.forEach((c, renderIdx) => {
+      const isLast = renderIdx === visibleCols.length - 1;
+      const resizer = isLast
+        ? ''
+        : `<span class="col-resizer" data-col="${c.originalIdx}"></span>`;
+      theadHtml += `<th>${resizer}${escapeHtml(c.label)}</th>`;
+    });
+    theadHtml += '</tr></thead>';
+
+    // tbody：行内按 visibleCols 顺序生成 td；遇到"第一个可见列 === proj"时按 rowspan 合并
+    html += `<table class="proj-table">${colgroupHtml}${theadHtml}<tbody>`;
+    const anchorFirst = (visibleCols[0] && visibleCols[0].key === "proj");
+
     g.tasks.forEach((t, idx) => {
+      // 评论列渲染策略（未变）
       const cached = state.commentsCache[t.task_id];
-      const isFirst = idx === 0;
-      // 评论列渲染策略：
-      //   - 未拉取（undefined）：显示「加载评论中…」
-      //   - 已拉取为空数组（[]）：显示「该任务暂无评论」
-      //   - 已拉取有数据：直接堆叠渲染（按倒序，多条独立成块）
       let commentsHtml;
       if (cached === undefined){
         commentsHtml = '<div class="cell-loading">加载评论中…</div>';
@@ -1005,21 +1192,43 @@ function renderTable(items){
       } else {
         commentsHtml = renderComments(cached);
       }
-      // 合并跨度 = 项目任务数（详情行已去掉）
-      const span = g.tasks.length;
+
       html += `<tr class="task-row" data-id="${escapeHtml(t.task_id)}">`;
-      if (isFirst){
-        html += `<td class="proj-cell" rowspan="${span}">`
-          + `<span class="proj-name">${escapeHtml(g.name)}</span>`
-          + `<span class="proj-count">共 ${g.tasks.length} 条</span>`
-          + '</td>';
-      }
-      html += `<td class="cell-id">${escapeHtml(t.identifier || "-")}</td>`
-        + `<td class="cell-title">${buildTaskTitle(t)}</td>`
-        + `<td class="cell-comments" data-comments="${escapeHtml(t.task_id)}">${commentsHtml}</td>`
-        + `<td title="${escapeHtml(t.assignee || "")}">${escapeHtml(t.assignee)}</td>`
-        + `<td title="${escapeHtml(t.updated_at || t.updated_at_str)}">${escapeHtml(t.updated_at_str)}</td>`
-        + '</tr>';
+      visibleCols.forEach((c, renderIdx) => {
+        if (anchorFirst && c.key === "proj"){
+          // 分组合并的"项目名称"列：仅 idx===0 写一次
+          if (idx === 0){
+            html += `<td class="proj-cell" rowspan="${groupLen}">`
+              + `<span class="proj-name">${escapeHtml(g.name)}</span>`
+              + `<span class="proj-count">共 ${groupLen} 条</span>`
+              + '</td>';
+          }
+          return;
+        }
+        // 普通 td 渲染（按 key 分发）
+        switch (c.key){
+          case "code":
+            html += `<td class="cell-id">${escapeHtml(t.identifier || "-")}</td>`;
+            break;
+          case "title":
+            html += `<td class="cell-title">${buildTaskTitle(t)}</td>`;
+            break;
+          case "comments":
+            html += `<td class="cell-comments" data-comments="${escapeHtml(t.task_id)}">${commentsHtml}</td>`;
+            break;
+          case "owner":
+            html += `<td title="${escapeHtml(t.assignee || "")}">${escapeHtml(t.assignee)}</td>`;
+            break;
+          case "updated":
+            html += `<td title="${escapeHtml(t.updated_at || t.updated_at_str)}">${escapeHtml(t.updated_at_str)}</td>`;
+            break;
+          case "proj":
+            // 非首列的 proj（理论上不会出现，因 anchor 限制，但兜底用每行重复显示）
+            html += `<td class="proj-cell-inline"><span class="proj-name">${escapeHtml(g.name)}</span></td>`;
+            break;
+        }
+      });
+      html += '</tr>';
     });
     html += '</tbody></table></div>';
   });
@@ -1237,8 +1446,9 @@ document.addEventListener("keydown", e => {
 
 // 页面加载：若已有有效会话则自动进入看板，否则显示登录页（解决每次都要输入凭证）
 async function bootstrap(){
-  loadColumnWidths();   // 恢复用户上次拖拽调整过的列宽
-  bindColumnResize();   // 全局一次性绑定列宽拖拽监听
+  loadColumnWidths();    // 恢复用户上次拖拽调整过的列宽
+  loadColumnConfig();    // 恢复用户上次自定义的列显隐与顺序
+  bindColumnResize();    // 全局一次性绑定列宽拖拽监听
   try {
     const me = await api("/api/me");      // 401 会自动跳回登录页并抛错
     if (me.tenant_host) state.tenantHost = me.tenant_host;
@@ -1547,11 +1757,202 @@ function initTitleSearch(){
 }
 
 initTitleSearch();
+
+/* ====================== 列设置弹窗 ====================== */
+
+/** 打开弹窗：渲染列设置列表。 */
+function openColumnSettings(){
+  const ul = document.getElementById("colSettingsList");
+  ul.innerHTML = "";
+  // 按当前 colOrder 顺序渲染（proj 永远在最上面作为锚定）
+  state.colOrder.forEach((key, idx) => {
+    ul.appendChild(buildColumnSettingRow(key, idx));
+  });
+  document.getElementById("colModalMask").classList.remove("hidden");
+  bindColumnRowDrag();
+}
+function closeColumnSettings(){
+  document.getElementById("colModalMask").classList.add("hidden");
+}
+/** 点遮罩层关闭（但点 modal 卡片内部不会冒泡到 mask）。 */
+function onColModalMaskClick(e){
+  if (e.target.id === "colModalMask") closeColumnSettings();
+}
+
+/** 重置列设置：清空所有用户改动，回 6 列全显 + 默认顺序 + 默认宽度。 */
+function resetColumnSettings(){
+  state.colOrder = [...DEFAULT_COL_ORDER];
+  for (const c of COLS_META) state.colVisible[c.key] = true;
+  state.colWidths = {};
+  saveColumnConfig();
+  saveColumnWidths();
+  // 重新渲染弹窗列表（让 UI 与默认状态一致）
+  openColumnSettings();
+  // 重新渲染主表格（应用默认列宽 + 默认列集合）
+  applyColumnConfig();
+}
+
+/** 创建弹窗里的一行（li.col-row）。 */
+function buildColumnSettingRow(key, idx){
+  const meta = COLS_META.find(m => m.key === key);
+  const li = document.createElement("li");
+  li.className = "col-row" + (meta.anchor ? " anchor" : "");
+  li.dataset.key = key;
+  li.dataset.originalIdx = String(idx);
+  if (!state.colVisible[key]) li.classList.add("is-hidden");
+
+  // 拖拽手柄（anchored 行 disable 视觉）
+  const handle = document.createElement("span");
+  handle.className = "drag-handle";
+  handle.textContent = "⋮⋮";
+  if (meta.anchor) handle.setAttribute("aria-disabled", "true");
+
+  // 复选框（anchor 行 disabled）
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.checked = state.colVisible[key];
+  cb.disabled = !!meta.anchor;
+  cb.addEventListener("change", () => {
+    state.colVisible[key] = cb.checked;
+    li.classList.toggle("is-hidden", !cb.checked);
+    applyColumnConfig();
+  });
+
+  // 列名
+  const label = document.createElement("span");
+  label.className = "col-label";
+  label.textContent = meta.label;
+
+  // 锚定标签
+  const tag = meta.anchor ? document.createElement("span") : null;
+  if (tag){
+    tag.className = "col-tag";
+    tag.textContent = "固定";
+    tag.title = "项目名称列用于分组合并，固定为第 1 列且不可隐藏";
+  }
+
+  li.appendChild(handle);
+  li.appendChild(cb);
+  li.appendChild(label);
+  if (tag) li.appendChild(tag);
+  return li;
+}
+
+/* -------- 弹窗内拖拽排序实现 -------- */
+let _colRowDrag = null;   // { srcLi, startY, srcRect }
+function bindColumnRowDrag(){
+  const list = document.getElementById("colSettingsList");
+  // 解绑老监听（避免重复绑定）：直接 cloneNode 替换 element
+  // 但保留 children 状态复杂，更稳妥做法是用一组 flag 标记，仅首次绑定。
+  if (list.dataset.dragBound === "1") return;
+  list.dataset.dragBound = "1";
+
+  // 计算当前 hover 位置（目标 li 上半 / 下半）
+  const computeHoverTarget = (clientY) => {
+    const items = [...list.querySelectorAll(".col-row:not(.dragging)")];
+    for (const el of items){
+      const r = el.getBoundingClientRect();
+      if (clientY < r.top + r.height / 2){
+        return { el, side: "top" };
+      }
+    }
+    if (items.length){
+      return { el: items[items.length - 1], side: "bot" };
+    }
+    return { el: null, side: null };
+  };
+
+  list.addEventListener("mousedown", e => {
+    const handle = e.target.closest(".drag-handle");
+    if (!handle) return;
+    const li = handle.closest(".col-row");
+    if (!li || li.classList.contains("anchor")) return;   // 锚定行不可拖
+    if (e.button !== 0) return;
+    e.preventDefault();
+    _colRowDrag = {
+      srcLi: li,
+      startY: e.clientY,
+      srcRect: li.getBoundingClientRect(),
+    };
+    li.classList.add("dragging");
+    document.body.classList.add("col-resizing");   // 复用全局禁选样式（避免选词）
+  });
+
+  document.addEventListener("mousemove", e => {
+    if (!_colRowDrag) return;
+    // 清除所有高亮
+    list.querySelectorAll(".col-row").forEach(r => {
+      r.classList.remove("drag-over-top", "drag-over-bot");
+    });
+    const { el, side } = computeHoverTarget(e.clientY);
+    if (el && el !== _colRowDrag.srcLi){
+      // 禁止越过 anchor 行：anchor 行的上方永远不能插入
+      if (el.classList.contains("anchor")){
+        if (side === "top") return;   // 试图放到 anchor 上方 → 不响应
+      }
+      el.classList.add(side === "top" ? "drag-over-top" : "drag-over-bot");
+    }
+  });
+
+  document.addEventListener("mouseup", e => {
+    if (!_colRowDrag) return;
+    const { srcLi } = _colRowDrag;
+    const { el, side } = computeHoverTarget(e.clientY);
+    // 清理高亮
+    list.querySelectorAll(".col-row").forEach(r => {
+      r.classList.remove("drag-over-top", "drag-over-bot");
+    });
+    srcLi.classList.remove("dragging");
+    document.body.classList.remove("col-resizing");
+
+    // 真正的 DOM 重排 + state 更新
+    if (el && el !== srcLi){
+      // 若目标在 anchor 行上方，禁止
+      if (el.classList.contains("anchor") && side === "top"){
+        _colRowDrag = null;
+        return;
+      }
+      if (side === "top") el.parentNode.insertBefore(srcLi, el);
+      else el.parentNode.insertBefore(srcLi, el.nextSibling);
+      // 同步 state.colOrder
+      const newOrder = [...list.querySelectorAll(".col-row")].map(r => r.dataset.key);
+      state.colOrder = newOrder;
+      applyColumnConfig();
+    }
+    _colRowDrag = null;
+  });
+}
 </script>
+
 
 <!-- 图片放大遮罩层 -->
 <div id="lightbox" onclick="closeLightbox()">
   <img id="lightboxImg" src="" alt="预览大图">
+</div>
+
+<!-- 列设置弹窗 -->
+<div id="colModalMask" class="col-modal-mask hidden" onclick="onColModalMaskClick(event)">
+  <div class="col-modal" onclick="event.stopPropagation()">
+    <header>
+      <h3>自定义列显示与顺序</h3>
+      <button class="x" onclick="closeColumnSettings()" title="关闭">×</button>
+    </header>
+    <div class="modal-body">
+      <p class="modal-hint">
+        勾选要显示的列；按住 <b>⋮⋮</b> 拖动可调整展示顺序。
+        第一列「项目名称」固定可见且不能调整，作为分组的视觉锚点。
+      </p>
+      <ul class="cols-list" id="colSettingsList"></ul>
+    </div>
+    <footer>
+      <div class="left">
+        <button class="btn-text" onclick="resetColumnSettings()" title="恢复默认：6 列全显、原始顺序、列宽清空">恢复默认</button>
+      </div>
+      <div class="right">
+        <button class="btn-text" onclick="closeColumnSettings()">关闭</button>
+      </div>
+    </footer>
+  </div>
 </div>
 </body>
 </html>
