@@ -1991,9 +1991,17 @@ async function loadTasks(){
   if (!state.projectId) return;
   const area = document.getElementById("tableArea");
   const isOverdue = state.view === "overdue";
-  area.innerHTML = isOverdue
-    ? '<div class="loading">正在扫描全部项目的延期任务，请稍候…</div>'
-    : '<div class="loading">加载任务中…</div>';
+  // 逾期视图根据当前 projectId 显示不同 loading 文案，让用户清楚扫描范围
+  let loadingHtml;
+  if (isOverdue){
+    const isAll = state.projectId === "__all__";
+    loadingHtml = isAll
+      ? '<div class="loading">正在扫描全部项目的延期任务，请稍候…</div>'
+      : `<div class="loading">正在扫描「${escapeHtml(state.projectName)}」的延期任务，请稍候…</div>`;
+  } else {
+    loadingHtml = '<div class="loading">加载任务中…</div>';
+  }
+  area.innerHTML = loadingHtml;
   try {
     // 延期视图：忽略关键字搜索，直接拉 /api/tasks/overdue（服务端已按范围全量过滤+缓存）
     const kw = isOverdue ? "" : buildSearchKeyword();
@@ -2010,6 +2018,13 @@ async function loadTasks(){
     state.total = data.total;
     state.hasMore = data.has_more;
     state.lastItems = data.items || [];     // 缓存一份，供「列设置变更后本地重渲」使用
+    // 逾期视图：用后端返回的真实 project_name 同步顶部项目筛选框，
+    // 避免用户在 overdue 视图时顶部还停留在旧值
+    if (isOverdue && data.project_name){
+      state.projectName = data.project_name;
+      const inputEl = document.getElementById("projectInput");
+      if (inputEl) inputEl.value = state.projectName;
+    }
     renderTable(state.lastItems);
     renderPager();
     if (isOverdue){
@@ -2045,7 +2060,8 @@ function setView(v){
     state.colOrder = OVERDUE_ORDER.slice();
     state.colVisible = { ...OVERDUE_VISIBLE };
     state.colModes = { ...OVERDUE_MODES };
-    state.projectName = "全部项目（延期任务）";
+    // 不再硬覆盖 state.projectName：让顶部项目框如实反映当前 projectId 的范围
+    // （loadTasks 收到响应后再用后端真实 project_name 同步一次）
   } else {
     state.view = "board";
     if (state.boardColOrder) state.colOrder = state.boardColOrder.slice();
@@ -2136,7 +2152,10 @@ function highlightTitle(title){
 function renderTable(items){
   const area = document.getElementById("tableArea");
   if (!items.length){
-    area.innerHTML = '<div class="loading">该项目下暂无任务</div>';
+    const msg = state.view === "overdue"
+      ? "该项目下暂无延期任务"
+      : "该项目下暂无任务";
+    area.innerHTML = '<div class="loading">' + msg + '</div>';
     return;
   }
   // 延期任务视图走统一单表（避免按项目拆卡片造成的"列对不齐 + 列头重复堆叠"）。

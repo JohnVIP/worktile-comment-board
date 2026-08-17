@@ -436,10 +436,14 @@ def tasks():
 
 @app.route("/api/tasks/overdue", methods=["GET"])
 def tasks_overdue():
-    """一键查看所有「已过期且未完成」的任务（跨全部项目）。
+    """一键查看「已过期且未完成」的任务（按当前项目筛选）。
 
     判定：due_at 存在 且 due_at < now 且 状态≠已完成。按逾期天数降序。
-    全量遍历所有项目较慢，故在会话内缓存 120s；翻页复用缓存，点「刷新」带 refresh=1 绕过。
+    支持 project_id：
+      - 不传 / "__all__"：跨全部项目
+      - 传具体项目 id：仅扫该项目
+    全量遍历所有项目较慢，故在会话内按 project_id 分桶缓存 120s；
+    翻页复用缓存，点「刷新」带 refresh=1 绕过。
     返回 diagnostics，便于核对 Worktile 真实的 due/status 字段名是否命中。
     """
     s = _require_session()
@@ -447,12 +451,22 @@ def tasks_overdue():
     try:
         now = time.time()
         force = request.args.get("refresh") == "1"
-        cache = s.get("_overdue_cache")
-        if (not force) and cache and (now - cache[0] < 120) and cache[2] == "__all__":
+        # 解析 project_id：缺省 / "__all__" / 不在会话内 → 视为全量
+        raw_pid = request.args.get("project_id", "__all__") or "__all__"
+        valid_ids = {p["id"] for p in s["projects"]}
+        project_id = raw_pid if (raw_pid == "__all__" or raw_pid in valid_ids) else "__all__"
+        cache = s.get("_overdue_cache")  # (ts, collected, pid, diag)
+        if (not force) and cache and (now - cache[0] < 120) and cache[2] == project_id:
             collected, diag = cache[1], cache[3]
         else:
-            collected, diag = _compute_overdue(s, member_map, now)
-            s["_overdue_cache"] = (now, collected, "__all__", diag)
+            collected, diag = _compute_overdue(s, member_map, now, project_id)
+            s["_overdue_cache"] = (now, collected, project_id, diag)
+        # 透出实际生效的 project_name，前端可用它同步顶部项目筛选框
+        if project_id == "__all__":
+            project_name = "全部项目（延期任务）"
+        else:
+            project_name = next((p.get("name", "") for p in s["projects"]
+                                 if p.get("id") == project_id), project_id)
         total = len(collected)
         try:
             page = max(int(request.args.get("page", 0)), 0)
@@ -468,7 +482,8 @@ def tasks_overdue():
         end = start + page_size
         return jsonify({
             "ok": True,
-            "project_name": "全部项目（延期任务）",
+            "project_id": project_id,
+            "project_name": project_name,
             "items": collected[start:end],
             "page": page,
             "page_size": page_size,
@@ -481,13 +496,23 @@ def tasks_overdue():
         return jsonify({"ok": False, "error": str(e)}), 502
 
 
-def _compute_overdue(s, member_map, now):
-    """遍历全部项目，筛出已过期且未完成的任务，返回 (列表, 诊断)。"""
+def _compute_overdue(s, member_map, now, project_id="__all__"):
+    """遍历目标范围（单项目或全部项目），筛出已过期且未完成的任务，返回 (列表, 诊断)。
+
+    project_id="__all__" 时跨全部项目；传具体项目 id 时仅扫该项目。
+    """
+    # 校验：单项目时确保 project_id 真实存在，避免把非法 id 当全量处理
+    if project_id != "__all__":
+        valid_ids = {p["id"] for p in s["projects"]}
+        if project_id not in valid_ids:
+            return [], {"scanned": 0, "with_due": 0, "with_status": 0,
+                        "sample_due_str": None, "sample_status": None,
+                        "error": f"project_id {project_id} not in session projects"}
     collected = []
     diag = {"scanned": 0, "with_due": 0, "with_status": 0,
             "sample_due_str": None, "sample_status": None}
     for t, _pname in s["client"]._iter_all_tasks(
-            s["projects"], "__all__", page_size=WorktileClient._FETCH_PAGE,
+            s["projects"], project_id, page_size=WorktileClient._FETCH_PAGE,
             member_map=member_map):
         diag["scanned"] += 1
         due = t.get("due_at")
