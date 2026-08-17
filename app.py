@@ -470,17 +470,25 @@ def tasks_overdue():
         raw_pid = request.args.get("project_id", "__all__") or "__all__"
         valid_ids = {p["id"] for p in s["projects"]}
         project_id = raw_pid if (raw_pid == "__all__" or raw_pid in valid_ids) else "__all__"
+        # 负责人过滤：缺省/空 → 不过滤；"__unassigned__" 视为未分配；其他视为 assignee uid。
+        # 前端只透传 normalize_task 里的 _assignee_uid（_ 前缀，wt_client 已下划线化），
+        # 不下发 display_name，避免中文名匹配出错。
+        owner_filter = (request.args.get("owner") or "").strip() or None
         # 探测模式（count_only=1）：仅用于刷新顶部 badge 上的「延期任务 (N)」数字，
         # 不需要负责人名映射、不要排序、不要返回 items，能省 5-10s（member_map 拉取）
         count_only = request.args.get("count_only") == "1"
         member_map = {} if count_only else _ensure_member_map(s)
-        cache = s.get("_overdue_cache")  # (ts, collected, pid, diag)
-        if (not force) and cache and (now - cache[0] < 120) and cache[2] == project_id:
+        # 缓存 key = (project_id, owner_filter) 二元组：不同 owner 的结果不能复用同一份 collected
+        # （否则换负责人后 badge 仍显示上一个 owner 的 total，造成"数字对不上"的混淆）
+        cache = s.get("_overdue_cache")
+        cache_key = (project_id, owner_filter)
+        if (not force) and cache and (now - cache[0] < 120) and cache[2] == cache_key:
             collected, diag = cache[1], cache[3]
         else:
             collected, diag = _compute_overdue(s, member_map, now, project_id,
-                                               count_only=count_only)
-            s["_overdue_cache"] = (now, collected, project_id, diag)
+                                               count_only=count_only,
+                                               owner_filter=owner_filter)
+            s["_overdue_cache"] = (now, collected, cache_key, diag)
         # 透出实际生效的 project_name，前端可用它同步顶部项目筛选框
         if project_id == "__all__":
             project_name = "全部项目（延期任务）"
@@ -530,11 +538,16 @@ def tasks_overdue():
         return jsonify({"ok": False, "error": str(e)}), 502
 
 
-def _compute_overdue(s, member_map, now, project_id="__all__", count_only=False):
+def _compute_overdue(s, member_map, now, project_id="__all__", count_only=False,
+                      owner_filter=None):
     """遍历目标范围（单项目或全部项目），筛出已过期且未完成的任务，返回 (列表, 诊断)。
 
     project_id="__all__" 时跨全部项目；传具体项目 id 时仅扫该项目。
     count_only=True 时跳过 sort、不返回 items（仅探测 total，给 badge 数字用）。
+    owner_filter：
+      - None / ""         → 不过滤
+      - "__unassigned__"  → 只收 _assignee_uid 为空的任务
+      - 其他字符串        → 只收 _assignee_uid 等于该值的任务（uid 形态，normalize_task 已下划线化）
     """
     # 校验：单项目时确保 project_id 真实存在，避免把非法 id 当全量处理
     if project_id != "__all__":
@@ -563,6 +576,17 @@ def _compute_overdue(s, member_map, now, project_id="__all__", count_only=False)
                                          else json.dumps(st, ensure_ascii=False))
         if due is None or t.get("is_completed") or due >= now:
             continue
+        # 负责人过滤：仅对"已过期未完成"这一步的命中结果再加 owner 维度
+        # - 放这里而不是更前：与 due/is_completed 共享同一条"continue"，避免重复
+        # - 用 _assignee_uid（uid）而非 display_name，比 name 稳（同一人重命名/重名不互相串）
+        if owner_filter is not None and owner_filter != "":
+            uid = t.get("_assignee_uid")
+            if owner_filter == "__unassigned__":
+                if uid:  # 有负责人 → 不算未分配
+                    continue
+            else:
+                if uid != owner_filter:
+                    continue
         t["overdue_days"] = int((now - due) // 86400)
         collected.append(t)
     if not count_only:

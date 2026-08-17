@@ -661,6 +661,7 @@ class WorktileClient:
             "due_at_str": _ts_to_str(due_at, full=True),
             "is_completed": is_completed,
             "_status_raw": status_raw,             # 仅供后端诊断使用（前端忽略）
+            "_assignee_uid": assignee_uid,         # _ 前缀：仅后端按 uid 过滤时使用（_ 前缀约定前端忽略）
         }
 
     # ------------------------------------------------------------------ 评论

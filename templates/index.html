@@ -1896,20 +1896,35 @@ function selectProject(id, name){
   if (id && id !== "__all__") refreshOverdueBadge(id);
 }
 
-/** 轻量探测指定项目的延期任务数，仅用于刷新顶部 badge。
- * 不传 project_id 或 id=="__all__" 时直接跳过（避免全项目扫描卡 UI）。 */
-async function refreshOverdueBadge(projectId){
+/** 轻量探测指定项目（可叠加负责人过滤）的延期任务数，仅用于刷新顶部 badge。
+ * 不传 project_id 或 id=="__all__" 时直接跳过（避免全项目扫描卡 UI）。
+ * owner_uid：
+ *   - null / "" / undefined → 不过滤（项目管理下的全部延期数）
+ *   - "__unassigned__"     → 后端按 _assignee_uid 为空过滤
+ *   - 其他字符串            → 后端按 _assignee_uid 精确匹配 */
+async function refreshOverdueBadge(projectId, ownerUid){
   if (!projectId || projectId === "__all__") return;
   const lbl = document.getElementById("overdueBtnLabel");
   if (!lbl) return;
   lbl.textContent = "延期任务 ···";
   lbl.classList.add("scanning");
+  let url = `/api/tasks/overdue?project_id=${encodeURIComponent(projectId)}&count_only=1`;
+  if (ownerUid) url += `&owner=${encodeURIComponent(ownerUid)}`;
   try {
-    const data = await api(
-      `/api/tasks/overdue?project_id=${encodeURIComponent(projectId)}&count_only=1`);
-    // 用户可能在探测期间又切了项目 → 只在 projectId 仍匹配 state.projectId 时回写
-    if (state.projectId === projectId && data && data.ok && data.total != null){
-      lbl.textContent = `延期任务 (${data.total})`;
+    const data = await api(url);
+    // 用户可能在探测期间又切了项目/负责人 → 只在 state 仍匹配时回写
+    if (state.projectId === projectId){
+      const cur = state.ownerFilter;
+      const curUid = cur === "__unassigned__" ? "__unassigned__"
+                   : (cur && cur.uid) || null;
+      // owner 也匹配（同一 owner 才能回写，避免"切了 owner 但旧响应覆盖"）。
+      // 用 == 而非 ===：selectProject 探测时 ownerUid=undefined、curUid=null，
+      // 两者都视作"未指定 owner"，应允许回写数字。
+      if (curUid == ownerUid && data && data.ok && data.total != null){
+        lbl.textContent = `延期任务 (${data.total})`;
+      } else {
+        lbl.textContent = "延期任务";
+      }
     } else {
       lbl.textContent = "延期任务";
     }
@@ -2217,6 +2232,17 @@ function selectOwner(filter){
   // 当前视图如果是 overdue，服务端已按 project_id 全量返回；前端只做内存过滤
   // board 视图同理：分页是按"原始 items"分页的，过滤在拿到 items 之后做
   loadTasks();
+  // board 视图下 loadTasks 走 /api/tasks（不带 overdue badge 刷新）；
+  // 这里手动触发一次轻量探测，让 badge 数字跟着 owner 走（与表格完全一致），
+  //   owner_filter: __all__（全部） → 跳过（要扫全部项目，~~慢）
+  //   owner_filter: __unassigned__ / 具体 uid → 按 owner 精确计数
+  // 注：overdue 视图下 loadTasks 内部已经会更新 badge，不需要重复
+  if (state.view !== "overdue" && state.projectId && state.projectId !== "__all__"){
+    const ownerParam = state.ownerFilter === "__unassigned__"
+      ? "__unassigned__"
+      : (state.ownerFilter && state.ownerFilter.uid) || null;
+    refreshOverdueBadge(state.projectId, ownerParam);
+  }
 }
 
 /** 判定一条任务是否通过当前负责人筛选，返回 true=通过 / false=不通过。
@@ -2287,6 +2313,16 @@ async function loadTasks(){
       state.overdueForceRefresh = false;
     } else if (kw){
       url += `&keyword=${encodeURIComponent(kw)}`;
+    }
+    // 延期视图透传 owner 过滤给后端（uid 形态，wt_client.normalize_task 已 _ 前缀化）
+    // - badge 上的数字 = data.total，必须是后端按 owner 过滤后的全集数
+    //   而不是前端的 items.length（分页模式下 items 只是一页）
+    // - 后端会按 (project_id, owner_filter) 二元 key 缓存，不同 owner 互不污染
+    if (isOverdue && state.ownerFilter){
+      const ownerParam = state.ownerFilter === "__unassigned__"
+        ? "__unassigned__"
+        : (state.ownerFilter.uid || "");
+      if (ownerParam) url += `&owner=${encodeURIComponent(ownerParam)}`;
     }
     const data = await api(url);
     state.total = data.total;
@@ -2425,9 +2461,11 @@ function highlightTitle(title){
 }
 
 function renderTable(items){
-  // 前端负责人筛选：state.ownerFilter 不为空时裁掉不匹配的任务；
-  // board 视图与 overdue 视图共用同一组过滤逻辑（在分页数据基础上再做一次内存过滤）。
-  if (state.ownerFilter != null){
+  // 负责人筛选：
+  //   - board 视图：后端 /api/tasks 不支持 owner 过滤，必须前端 in-memory 过滤
+  //   - overdue 视图：后端 /api/tasks/overdue 已经按 owner 过滤（避免双重过滤变 0 条，
+  //     且让 badge total 与表格可见数完全一致，不会出现"数据对了数字不对"的脱节）
+  if (state.view !== "overdue" && state.ownerFilter != null){
     items = items.filter(matchesOwnerFilter);
   }
   const area = document.getElementById("tableArea");
