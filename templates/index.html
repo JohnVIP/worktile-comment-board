@@ -887,6 +887,11 @@
   }
   .loading.error::before { display: none; }
   .error-hint { margin-top: var(--s-2); font-size: var(--fs-sm); color: var(--muted); }
+  /* 空态：与 .loading 同尺寸同位置，但无 spinner 旋转动画 */
+  .empty {
+    padding: 60px 24px; text-align: center;
+    color: var(--muted); font-size: var(--fs-sm);
+  }
 
   /* 分页 */
   .pager {
@@ -1820,7 +1825,7 @@ async function loadProjects(){
       '<div class="error-hint">请检查网络代理是否能访问 Worktile 服务器（沙箱出网代理可能会拦截）。</div></div>';
   } else {
     document.getElementById("tableArea").innerHTML =
-      '<div class="loading">该租户下没有可用的项目</div>';
+      '<div class="empty">该租户下没有可用的项目</div>';
   }
 }
 
@@ -2155,7 +2160,9 @@ function renderTable(items){
     const msg = state.view === "overdue"
       ? "该项目下暂无延期任务"
       : "该项目下暂无任务";
-    area.innerHTML = '<div class="loading">' + msg + '</div>';
+    // 用 .empty（无 spinner）而不是 .loading（有旋转动画），
+    // 避免空态看起来像一直在加载
+    area.innerHTML = '<div class="empty">' + msg + '</div>';
     return;
   }
   // 延期任务视图走统一单表（避免按项目拆卡片造成的"列对不齐 + 列头重复堆叠"）。
