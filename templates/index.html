@@ -571,6 +571,42 @@
   td.proj-cell .proj-dot-c5 { background: var(--p-5); box-shadow: 0 0 0 3px rgba(236,72,153,.12); }
   td.proj-cell .proj-dot-c6 { background: var(--p-6); box-shadow: 0 0 0 3px rgba(139,92,246,.12); }
 
+  /* ============ 单表模式（overdue 视图）：项目列紧凑版 ============
+     不再 rowspan 合并，每行单独显示；色点 + 项目名，列宽固定 180px，
+     长项目名截断省略号。色点色板与 proj-cell 复用 1~6。 */
+  td.proj-cell-inline {
+    vertical-align: middle;
+    padding: 10px var(--s-3);
+    border-right: 1px solid var(--border-soft);
+    background: linear-gradient(180deg, #fafbfd 0%, #f6f8fb 100%);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  td.proj-cell-inline .proj-dot {
+    display: inline-block;
+    width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+    flex-shrink: 0;
+  }
+  td.proj-cell-inline .proj-name {
+    font-size: var(--fs-xs);
+    color: var(--text-2);
+    font-weight: 500;
+    vertical-align: middle;
+  }
+  td.proj-cell-inline .proj-dot-c1 { background: var(--p-1); box-shadow: 0 0 0 2px rgba(99,102,241,.12); }
+  td.proj-cell-inline .proj-dot-c2 { background: var(--p-2); box-shadow: 0 0 0 2px rgba(6,182,212,.12); }
+  td.proj-cell-inline .proj-dot-c3 { background: var(--p-3); box-shadow: 0 0 0 2px rgba(245,158,11,.14); }
+  td.proj-cell-inline .proj-dot-c4 { background: var(--p-4); box-shadow: 0 0 0 2px rgba(16,185,129,.12); }
+  td.proj-cell-inline .proj-dot-c5 { background: var(--p-5); box-shadow: 0 0 0 2px rgba(236,72,153,.12); }
+  td.proj-cell-inline .proj-dot-c6 { background: var(--p-6); box-shadow: 0 0 0 2px rgba(139,92,246,.12); }
+  /* 项目切换处的可视分隔线（同一张表内，相邻行项目名变化时加一道浅分割） */
+  tbody tr.task-row.project-change td {
+    border-top: 1px solid var(--border);
+  }
+
   /* ============ 任务编号：等宽 # ID 风格 ============ */
   td.cell-id .id-tag {
     display: inline-flex; align-items: center;
@@ -1989,8 +2025,13 @@ async function loadTasks(){
 // 逾期视图使用独立的列布局（含 截止时间 / 逾期天数），与主看板布局互不污染
 const OVERDUE_ORDER = ["proj", "code", "title", "owner", "due", "overdue", "comments", "updated"];
 const OVERDUE_VISIBLE = Object.fromEntries(OVERDUE_ORDER.map(k => [k, true]));
+// proj 列固定 180px（避免长项目名撑宽整表；与用户保存的自定义宽度一致）；
+// 其他列保持 auto（按内容自适应）；只有 comments 是 fixed（中间可拖拽列）。
 const OVERDUE_MODES = Object.fromEntries(
-  OVERDUE_ORDER.map(k => [k, k === "comments" ? "fixed" : "auto"]));
+  OVERDUE_ORDER.map(k => {
+    if (k === "comments" || k === "proj") return [k, "fixed"];
+    return [k, "auto"];
+  }));
 
 /** 点击工具栏「延期任务」按钮：在 board / overdue 两视图间切换 */
 function toggleOverdueView(){
@@ -2098,6 +2139,9 @@ function renderTable(items){
     area.innerHTML = '<div class="loading">该项目下暂无任务</div>';
     return;
   }
+  // 延期任务视图走统一单表（避免按项目拆卡片造成的"列对不齐 + 列头重复堆叠"）。
+  // 跨项目"列对列"天然对齐，列宽只算一次；board 视图保持原按项目分组卡片不动。
+  if (state.view === "overdue") return renderOverdueTable(items);
   // 按项目名分组；每个项目渲染成独立的 <table>（外加 <div class="proj-block"> 做分组卡片）
   // 这样 proj 单元格的 rowspan 只在各自表内生效，不会跨组溢出造成"阶梯嵌套"假象
   const groups = [];
@@ -2294,6 +2338,174 @@ function renderTable(items){
   }
 
   // 首屏渲染后，并发拉取所有未缓存任务的评论（带并发限流，避免瞬时压垮 API）
+  const pending = items.map(t => t.task_id).filter(id => state.commentsCache[id] === undefined);
+  if (pending.length) prefetchComments(pending);
+}
+
+/**
+ * 延期任务视图：单张统一表渲染。
+ *
+ * 与 board 视图按项目拆卡片不同，overdue 跨项目聚合，单表渲染让：
+ *   - 列对齐天然成立（一张表只有一套 colgroup + thead，列宽计算一次即可）
+ *   - 列头不再每张卡片重复一次（之前每张 .proj-block 都有自己的 <thead>，视觉堆叠）
+ *   - 容器宽度自适应（同一张表，measureAndFitAutoColumns / expandEndpointColumns
+ *     天然适配；总宽 > 容器时由 .proj-block 的 overflow-x:auto 横滚）
+ *
+ * 列渲染策略与原 renderTable 保持一致；唯一区别：proj 列在每行单独显示（compact，
+ * 色点 + 项目名 + 截断省略号），不再 rowspan 合并。
+ */
+function renderOverdueTable(items){
+  // 列定义（与 renderTable 内联逻辑保持一致）
+  const visibleCols = state.colOrder
+    .map((key, originalIdx) => {
+      const meta = COLS_META.find(m => m.key === key);
+      return { key, label: meta.label, anchor: !!meta.anchor, endAnchor: !!meta.endAnchor, originalIdx };
+    })
+    .filter(c => state.colVisible[c.key]);
+  if (!visibleCols.length){
+    visibleCols.push({ key: "code", label: "任务编号", anchor: false, originalIdx: 1 });
+    state.colVisible.code = true;
+  }
+
+  // colgroup：单表模式 —— proj 固定 180（避免长项目名撑宽整表），其余按 colModes
+  let colgroupHtml = '<colgroup>';
+  visibleCols.forEach((c) => {
+    const isAuto = state.colModes[c.key] === "auto";
+    if (isAuto){
+      colgroupHtml += `<col data-col="${c.originalIdx}" data-mode="auto">`;
+    } else {
+      // proj 在 overdue 视图用 180 默认；用户保存的自定义宽度会被 applyColumnWidths() 覆盖
+      const defW = c.key === "proj" ? 180 : DEFAULT_COL_WIDTHS[c.key];
+      const customW = state.colWidths[c.originalIdx];
+      const w = customW || defW;
+      colgroupHtml += `<col data-col="${c.originalIdx}" data-mode="fixed" style="width:${w}px">`;
+    }
+  });
+  colgroupHtml += '</colgroup>';
+
+  // thead：单张表统一表头
+  let theadHtml = '<thead><tr>';
+  visibleCols.forEach((c, renderIdx) => {
+    const isLast = renderIdx === visibleCols.length - 1;
+    const isAnchor = !!c.anchor || !!c.endAnchor;
+    const isAuto = state.colModes[c.key] === "auto";
+    const isMiddleFixed = !isLast && !isAnchor && c.key === "comments";
+    const resizer = isMiddleFixed
+      ? `<span class="col-resizer" data-col="${c.originalIdx}"></span>`
+      : '';
+    const thAttr = (isAuto ? ' data-mode="auto"' : '') + (c.endAnchor ? ' data-endanchor="1"' : '');
+    theadHtml += `<th${thAttr}>${resizer}${escapeHtml(c.label)}</th>`;
+  });
+  theadHtml += '</tr></thead>';
+
+  // tbody：每行渲染（proj 单行显示 + 项目切换处加 .project-change 分隔线）
+  let html = '<div class="proj-block overdue-block">';
+  html += `<table class="proj-table overdue-table">${colgroupHtml}${theadHtml}<tbody>`;
+  let prevProj = null;
+  items.forEach((t) => {
+    const projName = t.project_name || "(未命名项目)";
+    const projChange = projName !== prevProj;
+    prevProj = projName;
+    const trCls = `task-row${projChange ? ' project-change' : ''}`;
+
+    // 评论列渲染（与 renderTable 内联逻辑一致）
+    const cached = state.commentsCache[t.task_id];
+    let commentsHtml;
+    if (cached === undefined){
+      commentsHtml = '<div class="cell-loading">加载评论中…</div>';
+    } else if (!cached.length){
+      commentsHtml = '<div class="cell-empty">暂无评论</div>';
+    } else {
+      commentsHtml = renderComments(cached);
+    }
+
+    html += `<tr class="${trCls}" data-id="${escapeHtml(t.task_id)}">`;
+    visibleCols.forEach((c) => {
+      const dataMode = state.colModes[c.key] === "auto" ? ' data-mode="auto"' : '';
+      const fixedW = state.colWidths[c.originalIdx] || DEFAULT_COL_WIDTHS[c.key];
+      const fixStyle = state.colModes[c.key] === "fixed"
+        ? ` style="min-width:${fixedW}px; max-width:${fixedW}px"`
+        : '';
+      switch (c.key){
+        case "proj": {
+          // 单表模式：每行单独显示项目名（compact，色点 + 名称，截断省略号）
+          const dotCls = projColorClass(projName);
+          html += `<td class="proj-cell-inline"${dataMode}${fixStyle} title="${escapeHtml(projName)}">`
+            + `<span class="proj-dot ${dotCls}"></span>`
+            + `<span class="proj-name">${escapeHtml(projName)}</span></td>`;
+          break;
+        }
+        case "code":
+          html += `<td class="cell-id"${dataMode}${fixStyle}><span class="id-tag">${escapeHtml(t.identifier || "-")}</span></td>`;
+          break;
+        case "title":
+          html += `<td class="cell-title"${dataMode}${fixStyle}>${buildTaskTitle(t)}</td>`;
+          break;
+        case "comments":
+          html += `<td class="cell-comments" data-comments="${escapeHtml(t.task_id)}"${dataMode}${fixStyle}>${commentsHtml}</td>`;
+          break;
+        case "owner": {
+          const raw = (t.assignee || "").trim();
+          const unassigned = raw === "" || raw === "未分配";
+          if (unassigned){
+            html += `<td class="cell-owner"${dataMode}${fixStyle}>`
+              + `<span class="owner unassigned" title="未分配"><span class="av"></span>`
+              + `<span class="name">未分配</span></span></td>`;
+          } else {
+            const avCls = ownerColorClass(raw);
+            const initial = raw.charAt(0).toUpperCase();
+            html += `<td class="cell-owner"${dataMode}${fixStyle} title="${escapeHtml(raw)}">`
+              + `<span class="owner"><span class="av ${avCls}">${escapeHtml(initial)}</span>`
+              + `<span class="name">${escapeHtml(raw)}</span></span></td>`;
+          }
+          break;
+        }
+        case "updated":
+          html += `<td class="cell-updated"${dataMode}${fixStyle} title="${escapeHtml(t.updated_at || t.updated_at_str)}">`
+            + `<span class="updated-time">${escapeHtml(t.updated_at_str || "—")}</span></td>`;
+          break;
+        case "due":
+          html += `<td class="cell-due"${dataMode}${fixStyle} title="${escapeHtml(t.due_at_str || "")}">`
+            + `<span class="updated-time">${escapeHtml(t.due_at_str || "—")}</span></td>`;
+          break;
+        case "overdue": {
+          const d = t.overdue_days;
+          if (d == null){
+            html += `<td class="cell-overdue"${dataMode}${fixStyle}>—</td>`;
+          } else {
+            const lvl = d >= 7 ? " sev-high" : (d >= 3 ? " sev-mid" : " sev-low");
+            html += `<td class="cell-overdue${lvl}"${dataMode}${fixStyle}>`
+              + `<span class="overdue-num">${d}</span><span class="overdue-unit">天</span></td>`;
+          }
+          break;
+        }
+      }
+    });
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+
+  document.getElementById("tableArea").innerHTML = html;
+
+  // 列宽应用 + 自适应测量 + 端点扩展（同一张表也跑一遍，逻辑天然支持单表）
+  applyColumnWidths();
+  measureAndFitAutoColumns();
+  expandEndpointColumns();
+
+  // 搜索命中提示横幅（与 renderTable 保持一致）
+  const kw = buildSearchKeyword();
+  if (kw){
+    const banner = document.createElement("div");
+    banner.className = "search-banner";
+    const parts = kw.split("|").filter(Boolean);
+    const chipsHtml = parts.map(p => `「<b>${escapeHtml(p)}</b>」`).join(" OR ");
+    banner.innerHTML = `正在按任务名称筛选 ${chipsHtml}`
+      + (state.total != null ? `，命中 ${state.total} 条` : "") + `。`;
+    const area2 = document.getElementById("tableArea");
+    area2.insertBefore(banner, area2.firstChild);
+  }
+
+  // 预取评论
   const pending = items.map(t => t.task_id).filter(id => state.commentsCache[id] === undefined);
   if (pending.length) prefetchComments(pending);
 }
