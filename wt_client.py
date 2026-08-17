@@ -126,12 +126,35 @@ def _to_epoch_sec(raw):
     return None
 
 
+def _due_to_epoch(due_raw):
+    """把 Worktile 的 due 字段统一成秒级 epoch。
+
+    Worktile 真实结构：properties.due = {"date": <epoch秒>, "with_time": 0}
+    （date 已是秒级时间戳，with_time=0 表示只精确到天）。
+    兼容旧版扁平时间戳/字符串，以及其它可能的嵌套 key（time/timestamp/value）。
+    无法解析返回 None。
+    """
+    if due_raw is None:
+        return None
+    if isinstance(due_raw, dict):
+        for k in ("date", "time", "timestamp", "deadline", "value", "ts"):
+            v = due_raw.get(k)
+            if isinstance(v, (int, float)) and v > 0:
+                return float(v) if v <= 1e11 else float(v) / 1000.0
+        for k in ("date", "time"):
+            s = due_raw.get(k)
+            if isinstance(s, str) and s.strip():
+                return _to_epoch_sec(s)
+        return None
+    return _to_epoch_sec(due_raw)
+
+
 def _is_completed(task, props):
-    """判断任务是否「已完成」。多候选信号，尽量兼容 Worktile 不同版本。
+    """判断任务是否「已完成 / 已结束」。多候选信号，尽量兼容 Worktile 不同版本。
 
     返回 True/False；信号缺失时返回 False（宁可少判，不误杀未完成任务）。
     """
-    # 1) 显式完成标记
+    # 1) 显式完成标记（部分版本可能在顶层或 properties）
     c = (_first(task, ["complete", "is_done", "finished", "done"])
          or _first(props, ["complete", "is_done", "finished", "done"]))
     if isinstance(c, bool):
@@ -144,18 +167,34 @@ def _is_completed(task, props):
             return True
         if low in ("false", "0", "no", "n", "否"):
             return False
-    # 2) status 字段（可能是对象 {key,name} 或字符串/数字代码）
+
+    # 2) Worktile 真实字段：task_state.type == 3 为「结束/完成态」
+    #    （实测包含 已完成 / 关 / 报废清理 等所有终态；顶层 state_type 与之同值）
+    ts = task.get("task_state") or (props.get("task_state") if isinstance(props, dict) else None)
+    if isinstance(ts, dict):
+        if ts.get("type") == 3:
+            return True
+        name = str(ts.get("name") or "")
+        if any(m in name.lower() for m in ("完成", "结项", "交付", "done", "complete", "closed", "close")):
+            return True
+    stype = task.get("state_type")
+    if isinstance(stype, int) and stype == 3:
+        return True
+
+    # 3) 旧版候选（status 对象/字符串/数字代码）
     st = (_first(task, ["status", "status_type", "entry_status", "state"])
           or _first(props, ["status", "status_type", "entry_status", "state"]))
     if st is None:
         return False
     if isinstance(st, dict):
+        if st.get("type") == 3:
+            return True
         val = str(st.get("key") or st.get("id") or st.get("name") or "")
     else:
         val = str(st)
     val = val.lower()
     done_markers = ("done", "complete", "completed", "finish",
-                    "closed", "close", "已完", "完成", "结项", "完工")
+                    "closed", "close", "已完", "完成", "结项", "完工", "交付")
     return any(m in val for m in done_markers)
 
 
@@ -598,12 +637,15 @@ class WorktileClient:
         assignee = member_map.get(assignee_uid, assignee_uid) if assignee_uid else "未分配"
         updated_at = task.get("updated_at") or task.get("update_at")
         # ---- 延期任务需要的两个字段 ----
-        # due 可能在任务顶层（V1）或 properties（V2），两处都尝试
+        # due 可能在任务顶层（V1）或 properties（V2），两处都尝试；
+        # 真实结构为 properties.due = {"date": <epoch秒>, "with_time": 0}
         due_raw = (_first(task, ["due_at", "due", "deadline", "end_at", "finish_at"])
                    or _first(props, ["due_at", "due", "deadline", "end_at", "finish_at"]))
-        due_at = _to_epoch_sec(due_raw)
-        status_raw = (_first(task, ["status", "status_type", "entry_status", "state"])
-                      or _first(props, ["status", "status_type", "entry_status", "state"]))
+        due_at = _due_to_epoch(due_raw)
+        # 真实状态字段是 task_state（{name,type}）或顶层 state_type（int）
+        status_raw = (task.get("task_state")
+                      or task.get("state_type")
+                      or _first(props, ["task_state", "state_type"]))
         is_completed = _is_completed(task, props)
         return {
             "task_id": task_id,
@@ -616,7 +658,7 @@ class WorktileClient:
             "updated_at_str": _ts_to_str(updated_at, full=True),
             # 延期判定所需
             "due_at": due_at,                       # 秒级 epoch，None 表示无截止时间
-            "due_at_str": _ts_to_str(due_raw, full=True),
+            "due_at_str": _ts_to_str(due_at, full=True),
             "is_completed": is_completed,
             "_status_raw": status_raw,             # 仅供后端诊断使用（前端忽略）
         }

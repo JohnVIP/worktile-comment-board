@@ -54,6 +54,7 @@ requirements.txt    依赖
 - **延期定义**：任务的截止时间（候选字段 `due` / `deadline` / `end_at` / `finish_at` 等）早于「当前时间」**且** 状态不是「已完成」（`done` / `completed` / `完成` / `结项` 等）。**无截止时间的任务不计入**。
 - **范围**：跨全部项目聚合（含全部活跃项目），首屏需全量遍历，故有 120 秒会话内缓存；点「刷新」按钮可绕过缓存重新扫描。
 - **字段名适配**：Worktile 不同版本的任务字段名可能不同。接口 `/api/tasks/overdue` 会返回 `diagnostics`（`scanned` / `with_due` / `with_status` / `sample_due_str` / `sample_status`）。若 `with_due` 或 `with_status` 为 0，说明候选字段名未命中，按 `sample_*` 实际值调整 `wt_client.py` 中 `_first(...)` 的候选列表即可，无需改其他逻辑。
+- **已实测公有云字段**（2026-08 真机验证通过）：截止时间位于 `properties.due = {"date": <秒级 epoch>, "with_time": 0}`，取其中的 `date`；状态位于 `task_state`（`{"name":..., "type":...}`）或顶层 `state_type`，其中 **`type == 3` 即结束/完成态**（实测涵盖 已完成 / 关 / 报废清理 等所有终态），据此判定「已完成」并排除。验证时全量扫描 89 个项目、2324 条任务，命中 992 条逾期。
 
 ## 多租户数据隔离
 
