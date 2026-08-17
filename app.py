@@ -324,6 +324,22 @@ def projects():
     })
 
 
+@app.route("/api/members", methods=["GET"])
+def members():
+    """返回租户下所有成员（用于顶部「负责人」筛选下拉）。
+
+    返回 `{uid, name}` 数组：uid 是 Worktile 的 user uid，前端按 uid 过滤（稳定）；
+    name 是 display_name，用于展示（中文名优先）。
+    "未分配" 不在这里列表里 —— 由前端在前端插入一项特殊值 `__unassigned__`。
+    """
+    s = _require_session()
+    member_map = _ensure_member_map(s)
+    # member_map 已是 {uid: name}，只需按 name 排序
+    items = [{"uid": uid, "name": name} for uid, name in member_map.items() if uid]
+    items.sort(key=lambda x: x["name"])
+    return jsonify({"ok": True, "members": items})
+
+
 def _ensure_member_map(s):
     with _session_lock(s):
         if s["member_map"] is None:

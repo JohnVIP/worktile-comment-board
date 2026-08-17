@@ -1125,6 +1125,13 @@
           <div class="search-select-menu" id="projectMenu" hidden></div>
         </div>
         <span class="divider"></span>
+        <span class="group-label">负责人</span>
+        <div class="search-select" id="ownerPicker">
+          <input type="text" id="ownerInput" placeholder="全部负责人" autocomplete="off" spellcheck="false">
+          <span class="caret">▾</span>
+          <div class="search-select-menu" id="ownerMenu" hidden></div>
+        </div>
+        <span class="divider"></span>
         <span class="group-label">每页</span>
         <select id="pageSize" onchange="onPageSizeChange()">
           {% for opt in page_size_options %}
@@ -1199,6 +1206,12 @@ const state = {
   projectId: "__all__",
   projectName: "全部项目",
   projects: [],       // 项目列表缓存（来自 /api/projects）
+  // 负责人筛选：null=全部 / "__unassigned__"=未分配 / {uid, name}=具体成员
+  // 负责人列表来自 /api/members，按 uid 匹配（name 中文相同也可能存在重复 uid）
+  ownerFilter: null,
+  members: [],        // 负责人列表缓存（来自 /api/members），[{uid, name}]
+  // 切换项目时清空 ownerFilter（避免跨项目残留不同成员造成"筛了等于没筛"的困惑）
+  // ownerFilter 重置在 selectProject 内执行。
   tenantHost: "techwll.worktile.com",  // 任务详情页跳转用的租户域名（来自 /api/me 或登录响应）
   clientIdMasked: "",    // 当前租户打码后的 client_id（隔离标识，来自 /api/me 或登录响应）
   tenantFingerprint: "", // 当前租户指纹（隔离证明，同一租户恒定、不同租户不同）
@@ -1839,6 +1852,8 @@ async function loadProjects(){
   state.projects = data.projects || [];  renderProjectMenu("");
   if (data.projects && data.projects.length){
     selectProject("__all__", "全部项目");
+    // 项目列表拉取成功后，并行拉负责人列表（独立接口，失败不影响主流程）
+    loadMembers().catch(e => console.warn("loadMembers 失败：", e && e.message));
   } else if (data.error){
     document.getElementById("tableArea").innerHTML =
       '<div class="loading error">加载项目失败：' + escapeHtml(data.error) +
@@ -1849,9 +1864,20 @@ async function loadProjects(){
   }
 }
 
+/** 从 /api/members 拉所有成员并写到 state.members，刷新负责人下拉。
+ * 失败抛错（由调用方选择忽略或提示），不阻塞主流程。 */
+async function loadMembers(){
+  const data = await api("/api/members");
+  state.members = data.members || [];
+  renderOwnerMenu("");
+}
+
 function selectProject(id, name){
   state.projectId = id;
   state.projectName = name;
+  // 切换项目时清空负责人筛选，避免跨项目残留不同成员造成"筛了等于没筛"的困惑
+  state.ownerFilter = null;
+  updateOwnerInput();
   closeProjectMenu();
   // 切换项目时清空任务名称搜索（chips + 草稿），避免跨项目残留关键字造成困惑
   // clearTitleSearch 内部会重置分页与缓存并 reload，无需下面重复
@@ -2021,6 +2047,193 @@ function onProjectKey(e){
     e.preventDefault();
   }
 }
+
+/* ====================== 搜索式负责人选择器 ======================
+ * 复用 projectPicker 的 search-select 样式与下拉浮层，独立维护一份高亮下标。
+ * 选项分两组：
+ *   1) 顶部固定两项："全部负责人"（uid=null）、"未分配"（uid="__unassigned__"）
+ *   2) 下面按 name 排序的全部租户成员
+ * 选择某项后：state.ownerFilter = null / "__unassigned__" / {uid, name}，
+ * 然后 reload 当前视图（重置分页到第 0 页，复用 loadTasks）。 */
+let _ownerHighlighted = -1;
+
+function initOwnerPicker(){
+  const input = document.getElementById("ownerInput");
+  const menu = document.getElementById("ownerMenu");
+  const picker = document.getElementById("ownerPicker");
+  input.addEventListener("focus", () => {
+    input.select();
+    openOwnerMenu();
+  });
+  input.addEventListener("input", () => renderOwnerMenu(input.value));
+  input.addEventListener("keydown", onOwnerKey);
+  document.addEventListener("click", (e) => {
+    if (!picker.contains(e.target)) closeOwnerMenu();
+  });
+}
+
+function openOwnerMenu(){
+  const input = document.getElementById("ownerInput");
+  const menu = document.getElementById("ownerMenu");
+  renderOwnerMenu(input.value === ownerFilterLabel() ? "" : input.value);
+  positionMenuUnder(menu, input);
+  menu.hidden = false;
+  _ownerHighlighted = -1;
+}
+
+function closeOwnerMenu(){
+  const menu = document.getElementById("ownerMenu");
+  if (menu) menu.hidden = true;
+  updateOwnerInput();
+  _ownerHighlighted = -1;
+}
+
+/** 把顶部负责人输入框的显示文本与 state.ownerFilter 同步。 */
+function updateOwnerInput(){
+  const input = document.getElementById("ownerInput");
+  if (input) input.value = ownerFilterLabel();
+}
+
+/** 当前负责人筛选条件的展示文本（用于 input 回填与下拉"selected"判定） */
+function ownerFilterLabel(){
+  const f = state.ownerFilter;
+  if (f == null) return "全部负责人";
+  if (f === "__unassigned__") return "未分配";
+  return f.name || f.uid;
+}
+
+function renderOwnerMenu(filterText){
+  const menu = document.getElementById("ownerMenu");
+  if (!menu) return;
+  menu.innerHTML = "";
+  // 顶部固定项（特殊语义）
+  const fixed = [
+    { uid: null, name: "全部负责人" },
+    { uid: "__unassigned__", name: "未分配" },
+  ];
+  const members = state.members || [];
+  const all = fixed.concat(members);
+  const q = (filterText || "").trim().toLowerCase();
+  const filtered = q
+    ? all.filter(it => it.name.toLowerCase().includes(q))
+    : all;
+  if (!filtered.length){
+    const empty = document.createElement("div");
+    empty.className = "opt-empty";
+    empty.textContent = "没有匹配的负责人";
+    menu.appendChild(empty);
+    return;
+  }
+  const currentLabel = ownerFilterLabel();
+  filtered.forEach((it, idx) => {
+    const div = document.createElement("div");
+    div.className = "opt" + (it.name === currentLabel ? " selected" : "");
+    div.dataset.uid = it.uid == null ? "" : String(it.uid);
+    div.dataset.unassigned = it.uid === "__unassigned__" ? "1" : "0";
+    if (q){
+      const lower = it.name.toLowerCase();
+      const pos = lower.indexOf(q);
+      if (pos >= 0){
+        div.innerHTML =
+          escapeHtml(it.name.slice(0, pos)) +
+          '<span class="hl">' + escapeHtml(it.name.slice(pos, pos + q.length)) + '</span>' +
+          escapeHtml(it.name.slice(pos + q.length));
+      } else {
+        div.textContent = it.name;
+      }
+    } else {
+      div.textContent = it.name;
+    }
+    div.addEventListener("click", () => {
+      let f;
+      if (it.uid == null) f = null;
+      else if (it.uid === "__unassigned__") f = "__unassigned__";
+      else f = { uid: it.uid, name: it.name };
+      selectOwner(f);
+    });
+    div.addEventListener("mouseenter", () => {
+      _ownerHighlighted = idx;
+      updateOwnerHighlight();
+    });
+    menu.appendChild(div);
+  });
+}
+
+function updateOwnerHighlight(){
+  const items = document.querySelectorAll("#ownerMenu .opt");
+  items.forEach((el, i) => el.classList.toggle("highlighted", i === _ownerHighlighted));
+}
+
+function onOwnerKey(e){
+  const menu = document.getElementById("ownerMenu");
+  const input = document.getElementById("ownerInput");
+  if (e.key === "Escape"){
+    closeOwnerMenu();
+    input.blur();
+    e.preventDefault();
+    return;
+  }
+  const items = Array.from(document.querySelectorAll("#ownerMenu .opt"));
+  if (e.key === "ArrowDown"){
+    if (menu.hidden) openOwnerMenu();
+    _ownerHighlighted = Math.min(_ownerHighlighted + 1, Math.max(items.length - 1, 0));
+    updateOwnerHighlight();
+    scrollOwnerHighlightedIntoView();
+    e.preventDefault();
+  } else if (e.key === "ArrowUp"){
+    _ownerHighlighted = Math.max(_ownerHighlighted - 1, 0);
+    updateOwnerHighlight();
+    scrollOwnerHighlightedIntoView();
+    e.preventDefault();
+  } else if (e.key === "Enter"){
+    if (!menu.hidden && _ownerHighlighted >= 0 && items[_ownerHighlighted]){
+      const it = items[_ownerHighlighted];
+      const isUnassigned = it.dataset.unassigned === "1";
+      const uid = it.dataset.uid;
+      let f;
+      if (!uid) f = null;
+      else if (isUnassigned) f = "__unassigned__";
+      else f = { uid: uid, name: it.textContent.trim() };
+      selectOwner(f);
+    }
+    e.preventDefault();
+  }
+}
+
+function scrollOwnerHighlightedIntoView(){
+  const menu = document.getElementById("ownerMenu");
+  const el = menu.querySelector(".opt.highlighted");
+  if (el) el.scrollIntoView({block:"nearest"});
+}
+
+/** 选了一个负责人（包含特殊项 null / "__unassigned__"），更新 state + UI + 重新加载。
+ * 与项目切换不同：选负责人不重置页码到 0（如果已经在第 2 页，应该继续在第 2 页过滤），
+ * 但要清空评论缓存和折叠状态（因为表格里任务列表会变）。 */
+function selectOwner(filter){
+  state.ownerFilter = filter;
+  closeOwnerMenu();
+  state.expanded.clear();
+  state.commentsCache = {};
+  // 当前视图如果是 overdue，服务端已按 project_id 全量返回；前端只做内存过滤
+  // board 视图同理：分页是按"原始 items"分页的，过滤在拿到 items 之后做
+  loadTasks();
+}
+
+/** 判定一条任务是否通过当前负责人筛选，返回 true=通过 / false=不通过。
+ * 任务 assignee 字段是 display_name（"未分配" / "John" 等），uid 不会暴露给前端。
+ * 三种 state.ownerFilter：
+ *   - null            → 所有任务都通过
+ *   - "__unassigned__"→ 仅 assignee === "未分配"
+ *   - {uid, name}     → 仅 assignee === name（用 display_name 匹配，uid 仅供后端/审计，
+ *                       不下发给前端，避免暴露内部 id 形态）
+ */
+function matchesOwnerFilter(task){
+  const f = state.ownerFilter;
+  if (f == null) return true;
+  if (f === "__unassigned__") return !task.assignee || task.assignee === "未分配";
+  return task.assignee && task.assignee === f.name;
+}
+
 function onPageSizeChange(){
   state.pageSize = parseInt(document.getElementById("pageSize").value, 10);
   state.page = 0; state.expanded.clear(); state.commentsCache = {};
@@ -2212,11 +2425,23 @@ function highlightTitle(title){
 }
 
 function renderTable(items){
+  // 前端负责人筛选：state.ownerFilter 不为空时裁掉不匹配的任务；
+  // board 视图与 overdue 视图共用同一组过滤逻辑（在分页数据基础上再做一次内存过滤）。
+  if (state.ownerFilter != null){
+    items = items.filter(matchesOwnerFilter);
+  }
   const area = document.getElementById("tableArea");
   if (!items.length){
-    const msg = state.view === "overdue"
-      ? "该项目下暂无延期任务"
-      : "该项目下暂无任务";
+    let msg;
+    if (state.view === "overdue"){
+      msg = state.ownerFilter != null
+        ? "该负责人下暂无延期任务"
+        : "该项目下暂无延期任务";
+    } else {
+      msg = state.ownerFilter != null
+        ? "该负责人下暂无任务"
+        : "该项目下暂无任务";
+    }
     // 用 .empty（无 spinner）而不是 .loading（有旋转动画），
     // 避免空态看起来像一直在加载
     area.innerHTML = '<div class="empty">' + msg + '</div>';
@@ -2828,6 +3053,8 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeLightbo
 
 // 初始化搜索式项目选择器
 initProjectPicker();
+// 初始化搜索式负责人选择器
+initOwnerPicker();
 
 /* ====================== 任务名称 typeahead + 多选 chip ====================== */
 
