@@ -140,10 +140,31 @@ def test_exhaust_retries_then_raise():
     assert calls["n"] == 4, f"应请求 4 次（1+3 重试），实际 {calls['n']}"
 
 
+def test_get_file_stream_retries_429():
+    c = make_client()
+    ok = FakeResp(200, headers={"Content-Type": "image/png"})
+    ok.content = b"PNGDATA"  # 模拟文件字节流
+    seq = [
+        FakeResp(429, text="<html>rate</html>", headers={"content-type": "text/html"}),
+        ok,
+    ]
+    patcher, calls = _patch_request(seq)
+    patcher.start()
+    try:
+        with mock.patch.object(wt_client.time, "sleep", lambda s: None):
+            data, ctype = c.get_file_stream("fid1")
+    finally:
+        patcher.stop()
+    assert data == b"PNGDATA", f"应返回文件字节流，实际 {data!r}"
+    assert ctype == "image/png", f"应返回 content-type，实际 {ctype!r}"
+    assert calls["n"] == 2, f"429 后重试成功应请求 2 次，实际 {calls['n']}"
+
+
 if __name__ == "__main__":
     test_retry_429_then_ok()
     test_retry_after_header()
     test_exponential_backoff_without_retry_after()
     test_non_retryable_raises_immediately()
     test_exhaust_retries_then_raise()
-    print("全部 5 个重试测试通过 ✓")
+    test_get_file_stream_retries_429()
+    print("全部 6 个重试测试通过 ✓")

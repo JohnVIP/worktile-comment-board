@@ -280,13 +280,13 @@ class WorktileClient:
     _RETRYABLE_STATUS = frozenset((429, 500, 502, 503, 504))
     _MAX_RETRIES = 3
 
-    def _req(self, method, path, params=None, json=None, _attempt=0):
+    def _req(self, method, path, params=None, json=None, _attempt=0, raw=False, timeout=30):
         def _do_request(token):
             p = dict(params or {})
             p["access_token"] = token
             url = f"{self.base_url}/open-api{path}"
             try:
-                resp = requests.request(method, url, params=p, json=json, timeout=30)
+                resp = requests.request(method, url, params=p, json=json, timeout=timeout)
             except requests.exceptions.RequestException as e:
                 raise RuntimeError(f"接口请求失败 {path}：{e}")
             return resp
@@ -327,7 +327,8 @@ class WorktileClient:
                   f"({_attempt + 1}/{self._MAX_RETRIES})，等待 {wait:.1f}s",
                   flush=True)
             time.sleep(wait)
-            return self._req(method, path, params=params, json=json, _attempt=_attempt + 1)
+            return self._req(method, path, params=params, json=json, _attempt=_attempt + 1,
+                             raw=raw, timeout=timeout)
 
         if resp.status_code >= 400:
             # ⚠️ 反爬/限流/临时维护页：Worktile 偶发用 HTML 响应 4xx/5xx
@@ -348,7 +349,7 @@ class WorktileClient:
             else:
                 msg = f"接口错误 {resp.status_code} {path}：{body_preview}"
             raise RuntimeError(msg)
-        return resp.json()
+        return resp if raw else resp.json()
 
     @staticmethod
     def _backoff_seconds(resp, attempt):
@@ -886,19 +887,15 @@ class WorktileClient:
         代理下载文件字节流，返回 (bytes, content_type)。
 
         - 自动附带 access_token；遇到 401 刷新 token 重试一次。
+        - 复用 _req 的退避重试：429/5xx 瞬时故障时自动重试（最多 3 次），
+          与评论接口保持一致，避免附件预览偶发失败时只能靠刷新页面。
         - 用文件信息缓存里的 ext 推断更精确的 MIME（Worktile 的 download 接口
           有时返回 application/octet-stream，浏览器据此无法预览 PDF / 图片），
           从而让前端 <img> 直接展示、<a> 在新标签预览 PDF。
         """
-        token = self._token or self._ensure_token()
-        url = f"{self.base_url}/open-api/file/{file_id}/download"
-        resp = requests.get(url, params={"access_token": token}, timeout=60)
-        if resp.status_code == 401:
-            self._token = None
-            token = self._ensure_token()
-            resp = requests.get(url, params={"access_token": token}, timeout=60)
-        if resp.status_code >= 400:
-            raise RuntimeError(f"文件下载失败 {resp.status_code}")
+        # raw=True：_req 直接返回 requests.Response（含 .content / .headers），不做 .json()
+        # timeout=60：文件可能较大，比普通 JSON 接口（30s）宽松
+        resp = self._req("GET", f"/file/{file_id}/download", raw=True, timeout=60)
 
         ctype = resp.headers.get("Content-Type", "") or ""
         ctype = ctype.split(";")[0].strip()
