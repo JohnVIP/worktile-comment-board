@@ -100,6 +100,65 @@ def _extract_assignee_uid(props):
     return None
 
 
+def _to_epoch_sec(raw):
+    """把 Worktile 时间字段统一成「秒级 epoch」，便于和 time.time() 比较。
+
+    兼容：秒/毫秒级整数时间戳、ISO 字符串（2026-08-12T14:43:18 / 2026-08-12 14:43:18）。
+    毫秒级（>1e11）自动转秒。无法解析返回 None（调用方据此跳过该任务）。
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        v = float(raw)
+        if v > 1e11:          # 毫秒级时间戳
+            v = v / 1000.0
+        return v
+    s = str(raw).strip()
+    if not s:
+        return None
+    head = s[:19]             # 兼容 .123Z / +08:00 尾巴
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(head, fmt).timestamp()
+        except ValueError:
+            continue
+    return None
+
+
+def _is_completed(task, props):
+    """判断任务是否「已完成」。多候选信号，尽量兼容 Worktile 不同版本。
+
+    返回 True/False；信号缺失时返回 False（宁可少判，不误杀未完成任务）。
+    """
+    # 1) 显式完成标记
+    c = (_first(task, ["complete", "is_done", "finished", "done"])
+         or _first(props, ["complete", "is_done", "finished", "done"]))
+    if isinstance(c, bool):
+        return c
+    if isinstance(c, (int, float)):
+        return c == 1
+    if isinstance(c, str):
+        low = c.strip().lower()
+        if low in ("true", "1", "yes", "y", "是"):
+            return True
+        if low in ("false", "0", "no", "n", "否"):
+            return False
+    # 2) status 字段（可能是对象 {key,name} 或字符串/数字代码）
+    st = (_first(task, ["status", "status_type", "entry_status", "state"])
+          or _first(props, ["status", "status_type", "entry_status", "state"]))
+    if st is None:
+        return False
+    if isinstance(st, dict):
+        val = str(st.get("key") or st.get("id") or st.get("name") or "")
+    else:
+        val = str(st)
+    val = val.lower()
+    done_markers = ("done", "complete", "completed", "finish",
+                    "closed", "close", "已完", "完成", "结项", "完工")
+    return any(m in val for m in done_markers)
+
+
 def _ts_to_str(ts, full=False):
     """时间戳 / 时间字符串 -> 可读字符串
     full=False（默认）：MM-DD HH:MM，省年省秒，节省列宽
@@ -538,6 +597,14 @@ class WorktileClient:
         assignee_uid = _extract_assignee_uid(props)
         assignee = member_map.get(assignee_uid, assignee_uid) if assignee_uid else "未分配"
         updated_at = task.get("updated_at") or task.get("update_at")
+        # ---- 延期任务需要的两个字段 ----
+        # due 可能在任务顶层（V1）或 properties（V2），两处都尝试
+        due_raw = (_first(task, ["due_at", "due", "deadline", "end_at", "finish_at"])
+                   or _first(props, ["due_at", "due", "deadline", "end_at", "finish_at"]))
+        due_at = _to_epoch_sec(due_raw)
+        status_raw = (_first(task, ["status", "status_type", "entry_status", "state"])
+                      or _first(props, ["status", "status_type", "entry_status", "state"]))
+        is_completed = _is_completed(task, props)
         return {
             "task_id": task_id,
             "identifier": identifier,
@@ -547,6 +614,11 @@ class WorktileClient:
             "assignee": assignee,
             "updated_at": updated_at,
             "updated_at_str": _ts_to_str(updated_at, full=True),
+            # 延期判定所需
+            "due_at": due_at,                       # 秒级 epoch，None 表示无截止时间
+            "due_at_str": _ts_to_str(due_raw, full=True),
+            "is_completed": is_completed,
+            "_status_raw": status_raw,             # 仅供后端诊断使用（前端忽略）
         }
 
     # ------------------------------------------------------------------ 评论

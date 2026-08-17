@@ -253,6 +253,10 @@
     box-shadow: 0 1px 2px rgba(79,70,229,.18);
   }
   .toolbar .pill-btn.primary:hover { background: var(--accent-2); color: #fff; }
+  .toolbar .pill-btn.active {
+    background: var(--accent-soft); color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
 
   /* 搜索式项目选择器 */
   .search-select { position: relative; display: inline-block; min-width: 180px; }
@@ -428,6 +432,20 @@
   table.proj-table th.cell-updated {
     white-space: normal;
   }
+  /* 截止时间列：复用 updated-time 等宽数字样式，允许换行 */
+  table.proj-table td.cell-due {
+    color: var(--muted); font-size: var(--fs-xs); white-space: normal;
+  }
+  table.proj-table td.cell-due .updated-time { font-variant-numeric: tabular-nums; }
+  /* 逾期天数：按严重程度分级配色（<=3 天浅 / 3~7 天中 / >=7 天深红） */
+  table.proj-table td.cell-overdue {
+    text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  table.proj-table td.cell-overdue .overdue-num { font-weight: 700; font-size: 14px; }
+  table.proj-table td.cell-overdue .overdue-unit { font-size: 11px; color: var(--muted); margin-left: 1px; }
+  table.proj-table td.cell-overdue.sev-low  .overdue-num { color: #b45309; }
+  table.proj-table td.cell-overdue.sev-mid  .overdue-num { color: #ea580c; }
+  table.proj-table td.cell-overdue.sev-high .overdue-num { color: #dc2626; }
   /* 右端点（最后一列）只在视觉上贴右，不再贴粗边、硬色块 —— 用柔和的内边距 + 极淡
      左边线 + 文字右对齐，告诉用户这是右端点，但更克制 */
   table.proj-table thead th:last-child {
@@ -1064,6 +1082,10 @@
         </div>
       </div>
       <div class="action-group">
+        <button id="overdueBtn" class="pill-btn" onclick="toggleOverdueView()" title="查看所有已过期且未完成的任务">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M9 2h6"/></svg>
+          <span id="overdueBtnLabel">延期任务</span>
+        </button>
         <button id="refreshBtn" class="pill-btn" onclick="refreshAll()" title="重新拉取任务列表与评论">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
           刷新
@@ -1096,6 +1118,8 @@ const COLS_META = [
   { key: "code",     label: "任务编号",     width: 110,               mode: "auto"  },
   { key: "title",    label: "任务名称",     width: 270,               mode: "auto"  },
   { key: "owner",    label: "任务负责人",   width: 130,               mode: "auto"  },
+  { key: "due",      label: "截止时间",     width: 150,               mode: "auto"  },  // 仅「延期任务」视图显示
+  { key: "overdue",  label: "逾期天数",     width: 90,                mode: "auto"  },  // 仅「延期任务」视图显示
   { key: "comments", label: "评论",        width: 490,               mode: "fixed" },
   { key: "updated",  label: "最近更新时间", width: 90,  endAnchor: true, mode: "auto" },
 ];
@@ -1134,6 +1158,13 @@ const state = {
   colOrder: [...DEFAULT_COL_ORDER],            // 当前列展示顺序（proj 始终在 [0]）
   colVisible: Object.fromEntries(COLS_META.map(c => [c.key, true])),  // 每列显隐
   colModes: { ...DEFAULT_COL_MODES },          // 每列宽度模式：fixed=固定可拖 / auto=按内容自适应
+  // 视图模式：board=普通看板，overdue=延期任务视图（仅后者显示 截止时间/逾期天数 两列）
+  view: "board",
+  // 主看板布局快照（进入逾期视图前保存，切回时恢复，互不污染）
+  boardColOrder: null,
+  boardColVisible: null,
+  boardColModes: null,
+  overdueForceRefresh: false,   // 逾期视图点「刷新」时置 true，绕过缓存
 };
 
 // =================== 列宽拖拽调节 ===================
@@ -1243,6 +1274,11 @@ function loadColumnConfig(){
       if (!seen.has(k)){ ordered.push(k); seen.add(k); }
     }
     state.colOrder = ["proj", ...ordered, "updated"];
+  }
+  // 截止时间 / 逾期天数 两列仅用于「延期任务」视图，绝不在普通看板出现
+  for (const k of ["due", "overdue"]){
+    state.colVisible[k] = false;
+    state.colOrder = state.colOrder.filter(x => x !== k);
   }
 }
 function saveColumnConfig(){
@@ -1905,6 +1941,7 @@ function refreshAll(){
   btn.textContent = "刷新中…";
   state.expanded.clear();
   state.commentsCache = {};
+  if (state.view === "overdue") state.overdueForceRefresh = true;  // 逾期视图：强制重新扫描全部项目
   loadTasks().finally(() => {
     // 等 loadTasks 完成（resolve 或 reject）后恢复按钮
     setTimeout(() => {
@@ -1917,21 +1954,72 @@ function refreshAll(){
 async function loadTasks(){
   if (!state.projectId) return;
   const area = document.getElementById("tableArea");
-  area.innerHTML = '<div class="loading">加载任务中…</div>';
+  const isOverdue = state.view === "overdue";
+  area.innerHTML = isOverdue
+    ? '<div class="loading">正在扫描全部项目的延期任务，请稍候…</div>'
+    : '<div class="loading">加载任务中…</div>';
   try {
-    const kw = buildSearchKeyword();
-    const url = `/api/tasks?project_id=${encodeURIComponent(state.projectId)}`
-      + `&page=${state.page}&page_size=${state.pageSize}`
-      + (kw ? `&keyword=${encodeURIComponent(kw)}` : ``);
+    // 延期视图：忽略关键字搜索，直接拉 /api/tasks/overdue（服务端已按范围全量过滤+缓存）
+    const kw = isOverdue ? "" : buildSearchKeyword();
+    const base = isOverdue ? "/api/tasks/overdue" : "/api/tasks";
+    let url = `${base}?project_id=${encodeURIComponent(state.projectId)}`
+      + `&page=${state.page}&page_size=${state.pageSize}`;
+    if (isOverdue && state.overdueForceRefresh){
+      url += "&refresh=1";
+      state.overdueForceRefresh = false;
+    } else if (kw){
+      url += `&keyword=${encodeURIComponent(kw)}`;
+    }
     const data = await api(url);
     state.total = data.total;
     state.hasMore = data.has_more;
     state.lastItems = data.items || [];     // 缓存一份，供「列设置变更后本地重渲」使用
     renderTable(state.lastItems);
     renderPager();
+    if (isOverdue){
+      const lbl = document.getElementById("overdueBtnLabel");
+      if (lbl) lbl.textContent = `延期任务 (${data.total != null ? data.total : state.lastItems.length})`;
+    }
   } catch(e){
     area.innerHTML = `<div class="alert">${escapeHtml(e.message)}</div>`;
   }
+}
+
+// ====================== 延期任务视图切换 ======================
+// 逾期视图使用独立的列布局（含 截止时间 / 逾期天数），与主看板布局互不污染
+const OVERDUE_ORDER = ["proj", "code", "title", "owner", "due", "overdue", "comments", "updated"];
+const OVERDUE_VISIBLE = Object.fromEntries(OVERDUE_ORDER.map(k => [k, true]));
+const OVERDUE_MODES = Object.fromEntries(
+  OVERDUE_ORDER.map(k => [k, k === "comments" ? "fixed" : "auto"]));
+
+/** 点击工具栏「延期任务」按钮：在 board / overdue 两视图间切换 */
+function toggleOverdueView(){
+  setView(state.view === "overdue" ? "board" : "overdue");
+}
+
+/** 切换视图并加载对应数据。board 恢复用户保存的主看板布局；overdue 用独立列布局。 */
+function setView(v){
+  if (v === "overdue"){
+    state.view = "overdue";
+    state.colOrder = OVERDUE_ORDER.slice();
+    state.colVisible = { ...OVERDUE_VISIBLE };
+    state.colModes = { ...OVERDUE_MODES };
+    state.projectName = "全部项目（延期任务）";
+  } else {
+    state.view = "board";
+    if (state.boardColOrder) state.colOrder = state.boardColOrder.slice();
+    if (state.boardColVisible) state.colVisible = { ...state.boardColVisible };
+    if (state.boardColModes) state.colModes = { ...state.boardColModes };
+  }
+  state.page = 0;
+  updateViewUI();
+  loadTasks();
+}
+
+/** 视图切换后更新工具栏按钮高亮状态 */
+function updateViewUI(){
+  const btn = document.getElementById("overdueBtn");
+  if (btn) btn.classList.toggle("active", state.view === "overdue");
 }
 
 function escapeHtml(s){
@@ -2154,6 +2242,21 @@ function renderTable(items){
               // 不需要任何 pre-line / \n 干预。
               + `<span class="updated-time">${escapeHtml(t.updated_at_str || "—")}</span></td>`;
             break;
+          case "due":
+            html += `<td class="cell-due"${dataMode}${fixStyle} title="${escapeHtml(t.due_at_str || "")}">`
+              + `<span class="updated-time">${escapeHtml(t.due_at_str || "—")}</span></td>`;
+            break;
+          case "overdue": {
+            const d = t.overdue_days;
+            if (d == null){
+              html += `<td class="cell-overdue"${dataMode}${fixStyle}>—</td>`;
+            } else {
+              const lvl = d >= 7 ? " sev-high" : (d >= 3 ? " sev-mid" : " sev-low");
+              html += `<td class="cell-overdue${lvl}"${dataMode}${fixStyle}>`
+                + `<span class="overdue-num">${d}</span><span class="overdue-unit">天</span></td>`;
+            }
+            break;
+          }
           case "proj":
             // 非首列的 proj（理论上不会出现，因 anchor 限制，但兜底用每行重复显示）
             html += `<td class="proj-cell-inline"${dataMode}${fixStyle}><span class="proj-name">${escapeHtml(g.name)}</span></td>`;
@@ -2396,6 +2499,10 @@ document.addEventListener("keydown", e => {
 async function bootstrap(){
   loadColumnWidths();    // 恢复用户上次拖拽调整过的列宽
   loadColumnConfig();    // 恢复用户上次自定义的列显隐与顺序
+  // 快照主看板布局（进入延期视图时切换，切回时恢复）
+  state.boardColOrder = state.colOrder.slice();
+  state.boardColVisible = { ...state.colVisible };
+  state.boardColModes = { ...state.colModes };
   bindColumnResize();    // 全局一次性绑定列宽拖拽监听
   try {
     const me = await api("/api/me");      // 401 会自动跳回登录页并抛错
@@ -2731,6 +2838,11 @@ function onColModalMaskClick(e){
 function resetColumnSettings(){
   state.colOrder = [...DEFAULT_COL_ORDER];
   for (const c of COLS_META) state.colVisible[c.key] = true;
+  // 截止时间 / 逾期天数 仅延期视图用，重置主看板时不能让它们混进来
+  for (const k of ["due", "overdue"]){
+    state.colVisible[k] = false;
+    state.colOrder = state.colOrder.filter(x => x !== k);
+  }
   state.colModes = { ...DEFAULT_COL_MODES };
   state.colModes["proj"] = "fixed";   // 锚定列永远固定
   state.colWidths = {};

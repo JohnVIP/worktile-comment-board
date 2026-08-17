@@ -434,6 +434,81 @@ def tasks():
     })
 
 
+@app.route("/api/tasks/overdue", methods=["GET"])
+def tasks_overdue():
+    """一键查看所有「已过期且未完成」的任务（跨全部项目）。
+
+    判定：due_at 存在 且 due_at < now 且 状态≠已完成。按逾期天数降序。
+    全量遍历所有项目较慢，故在会话内缓存 120s；翻页复用缓存，点「刷新」带 refresh=1 绕过。
+    返回 diagnostics，便于核对 Worktile 真实的 due/status 字段名是否命中。
+    """
+    s = _require_session()
+    member_map = _ensure_member_map(s)
+    try:
+        now = time.time()
+        force = request.args.get("refresh") == "1"
+        cache = s.get("_overdue_cache")
+        if (not force) and cache and (now - cache[0] < 120) and cache[2] == "__all__":
+            collected, diag = cache[1], cache[3]
+        else:
+            collected, diag = _compute_overdue(s, member_map, now)
+            s["_overdue_cache"] = (now, collected, "__all__", diag)
+        total = len(collected)
+        try:
+            page = max(int(request.args.get("page", 0)), 0)
+        except ValueError:
+            page = 0
+        try:
+            page_size = int(request.args.get("page_size", 50))
+        except ValueError:
+            page_size = 50
+        if page_size not in PAGE_SIZE_OPTIONS:
+            page_size = 50
+        start = page * page_size
+        end = start + page_size
+        return jsonify({
+            "ok": True,
+            "project_name": "全部项目（延期任务）",
+            "items": collected[start:end],
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "has_more": end < total,
+            "keyword": "",
+            "diagnostics": diag,
+        })
+    except RuntimeError as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
+
+
+def _compute_overdue(s, member_map, now):
+    """遍历全部项目，筛出已过期且未完成的任务，返回 (列表, 诊断)。"""
+    collected = []
+    diag = {"scanned": 0, "with_due": 0, "with_status": 0,
+            "sample_due_str": None, "sample_status": None}
+    for t, _pname in s["client"]._iter_all_tasks(
+            s["projects"], "__all__", page_size=WorktileClient._FETCH_PAGE,
+            member_map=member_map):
+        diag["scanned"] += 1
+        due = t.get("due_at")
+        if due is not None:
+            diag["with_due"] += 1
+            if diag["sample_due_str"] is None:
+                diag["sample_due_str"] = t.get("due_at_str")
+        st = t.get("_status_raw")
+        if st is not None:
+            diag["with_status"] += 1
+            if diag["sample_status"] is None:
+                diag["sample_status"] = (st if isinstance(st, (str, int, float))
+                                         else json.dumps(st, ensure_ascii=False))
+        if due is None or t.get("is_completed") or due >= now:
+            continue
+        t["overdue_days"] = int((now - due) // 86400)
+        collected.append(t)
+    collected.sort(key=lambda x: x.get("overdue_days", 0), reverse=True)
+    return collected, diag
+
+
 @app.route("/api/tasks/<task_id>/comments", methods=["GET"])
 def task_comments(task_id):
     s = _require_session()
