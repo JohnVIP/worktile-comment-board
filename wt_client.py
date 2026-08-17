@@ -311,7 +311,24 @@ class WorktileClient:
             resp = _do_request(new_token)
 
         if resp.status_code >= 400:
-            raise RuntimeError(f"接口错误 {resp.status_code} {path}：{resp.text[:300]}")
+            # ⚠️ 反爬/限流/临时维护页：Worktile 偶发用 HTML 响应 4xx/5xx
+            # （常见 429 Too Many Requests 直接返 nginx 限流页）。如果不识别就把整页 HTML
+            # 塞进错误消息，前端评论单元会被当成评论正文渲染。
+            ctype = (resp.headers.get("content-type") or "").lower()
+            body_preview = (resp.text or "")[:300]
+            is_html = ("html" in ctype) or body_preview.lstrip().startswith(("<!", "<html"))
+            if is_html:
+                if resp.status_code == 429:
+                    msg = f"Worktile 接口限流 (HTTP 429 {path})，请稍后重试"
+                elif resp.status_code in (502, 503, 504):
+                    msg = f"Worktile 上游网关不可用 (HTTP {resp.status_code} {path})，请稍后重试"
+                elif resp.status_code == 403:
+                    msg = f"Worktile 拒绝访问 (HTTP 403 {path})，可能被反爬，详见 .secret 后台"
+                else:
+                    msg = f"Worktile 返回 HTML (HTTP {resp.status_code} {path})，疑似临时维护/反爬，请稍后重试"
+            else:
+                msg = f"接口错误 {resp.status_code} {path}：{body_preview}"
+            raise RuntimeError(msg)
         return resp.json()
 
     # ------------------------------------------------------------------ 项目
