@@ -24,3 +24,7 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# 本地产物 / 截图
+data/outputs/
+outputs/
