@@ -447,7 +447,6 @@ def tasks_overdue():
     返回 diagnostics，便于核对 Worktile 真实的 due/status 字段名是否命中。
     """
     s = _require_session()
-    member_map = _ensure_member_map(s)
     try:
         now = time.time()
         force = request.args.get("refresh") == "1"
@@ -455,11 +454,16 @@ def tasks_overdue():
         raw_pid = request.args.get("project_id", "__all__") or "__all__"
         valid_ids = {p["id"] for p in s["projects"]}
         project_id = raw_pid if (raw_pid == "__all__" or raw_pid in valid_ids) else "__all__"
+        # 探测模式（count_only=1）：仅用于刷新顶部 badge 上的「延期任务 (N)」数字，
+        # 不需要负责人名映射、不要排序、不要返回 items，能省 5-10s（member_map 拉取）
+        count_only = request.args.get("count_only") == "1"
+        member_map = {} if count_only else _ensure_member_map(s)
         cache = s.get("_overdue_cache")  # (ts, collected, pid, diag)
         if (not force) and cache and (now - cache[0] < 120) and cache[2] == project_id:
             collected, diag = cache[1], cache[3]
         else:
-            collected, diag = _compute_overdue(s, member_map, now, project_id)
+            collected, diag = _compute_overdue(s, member_map, now, project_id,
+                                               count_only=count_only)
             s["_overdue_cache"] = (now, collected, project_id, diag)
         # 透出实际生效的 project_name，前端可用它同步顶部项目筛选框
         if project_id == "__all__":
@@ -468,6 +472,20 @@ def tasks_overdue():
             project_name = next((p.get("name", "") for p in s["projects"]
                                  if p.get("id") == project_id), project_id)
         total = len(collected)
+        if count_only:
+            # 探测模式：直接返回 total，不分页不返回 items，前端仅更新 badge
+            return jsonify({
+                "ok": True,
+                "project_id": project_id,
+                "project_name": project_name,
+                "items": [],
+                "page": 0,
+                "page_size": 0,
+                "total": total,
+                "has_more": False,
+                "keyword": "",
+                "diagnostics": diag,
+            })
         try:
             page = max(int(request.args.get("page", 0)), 0)
         except ValueError:
@@ -496,10 +514,11 @@ def tasks_overdue():
         return jsonify({"ok": False, "error": str(e)}), 502
 
 
-def _compute_overdue(s, member_map, now, project_id="__all__"):
+def _compute_overdue(s, member_map, now, project_id="__all__", count_only=False):
     """遍历目标范围（单项目或全部项目），筛出已过期且未完成的任务，返回 (列表, 诊断)。
 
     project_id="__all__" 时跨全部项目；传具体项目 id 时仅扫该项目。
+    count_only=True 时跳过 sort、不返回 items（仅探测 total，给 badge 数字用）。
     """
     # 校验：单项目时确保 project_id 真实存在，避免把非法 id 当全量处理
     if project_id != "__all__":
@@ -530,7 +549,10 @@ def _compute_overdue(s, member_map, now, project_id="__all__"):
             continue
         t["overdue_days"] = int((now - due) // 86400)
         collected.append(t)
-    collected.sort(key=lambda x: x.get("overdue_days", 0), reverse=True)
+    if not count_only:
+        # 探测模式跳过 sort：sort 是 O(n log n) 且需要序列化 stable，
+        # 探测场景下 total 已经在 collected 长度里，不需要有序
+        collected.sort(key=lambda x: x.get("overdue_days", 0), reverse=True)
     return collected, diag
 
 

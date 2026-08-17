@@ -257,6 +257,26 @@
     background: var(--accent-soft); color: var(--accent);
     box-shadow: inset 0 0 0 1px var(--accent);
   }
+  /* 「延期任务」按钮 badge 探测中态：文字色变弱 + 一个跳动的省略号点 */
+  #overdueBtnLabel.scanning {
+    color: var(--muted);
+    position: relative;
+    padding-left: 14px;
+  }
+  #overdueBtnLabel.scanning::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 50%;
+    width: 6px; height: 6px;
+    margin-top: -3px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: badge-dot 0.9s ease-in-out infinite;
+  }
+  @keyframes badge-dot {
+    0%, 100% { opacity: 0.3; transform: scale(0.8); }
+    50%      { opacity: 1;   transform: scale(1.2); }
+  }
 
   /* 搜索式项目选择器 */
   .search-select { position: relative; display: inline-block; min-width: 180px; }
@@ -1836,6 +1856,42 @@ function selectProject(id, name){
   // 切换项目时清空任务名称搜索（chips + 草稿），避免跨项目残留关键字造成困惑
   // clearTitleSearch 内部会重置分页与缓存并 reload，无需下面重复
   clearTitleSearch();
+  // 切换项目后立即清空「延期任务」按钮上的数字（避免残留上次的项目数误导用户），
+  // 然后触发一次轻量探测刷新 badge：
+  //   - 单项目：调 /api/tasks/overdue?project_id=...&count_only=1，只数 total 不返回 items，
+  //             1 秒内能拿到正确数字
+  //   - 全部项目（__all__）：跳过探测（要扫 89 个项目、~13s，主动探测会卡 UI），
+  //             保持按钮无数字，等用户主动点「延期任务」按钮时再扫描
+  const lbl = document.getElementById("overdueBtnLabel");
+  if (lbl){
+    lbl.textContent = "延期任务";
+    lbl.classList.remove("scanning");
+  }
+  if (id && id !== "__all__") refreshOverdueBadge(id);
+}
+
+/** 轻量探测指定项目的延期任务数，仅用于刷新顶部 badge。
+ * 不传 project_id 或 id=="__all__" 时直接跳过（避免全项目扫描卡 UI）。 */
+async function refreshOverdueBadge(projectId){
+  if (!projectId || projectId === "__all__") return;
+  const lbl = document.getElementById("overdueBtnLabel");
+  if (!lbl) return;
+  lbl.textContent = "延期任务 ···";
+  lbl.classList.add("scanning");
+  try {
+    const data = await api(
+      `/api/tasks/overdue?project_id=${encodeURIComponent(projectId)}&count_only=1`);
+    // 用户可能在探测期间又切了项目 → 只在 projectId 仍匹配 state.projectId 时回写
+    if (state.projectId === projectId && data && data.ok && data.total != null){
+      lbl.textContent = `延期任务 (${data.total})`;
+    } else {
+      lbl.textContent = "延期任务";
+    }
+  } catch(e){
+    lbl.textContent = "延期任务";
+  } finally {
+    lbl.classList.remove("scanning");
+  }
 }
 
 /* ====================== 搜索式项目选择器 ====================== */
@@ -2035,6 +2091,7 @@ async function loadTasks(){
     if (isOverdue){
       const lbl = document.getElementById("overdueBtnLabel");
       if (lbl) lbl.textContent = `延期任务 (${data.total != null ? data.total : state.lastItems.length})`;
+      if (lbl) lbl.classList.remove("scanning");
     }
   } catch(e){
     area.innerHTML = `<div class="alert">${escapeHtml(e.message)}</div>`;
