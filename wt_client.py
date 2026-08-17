@@ -20,6 +20,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".heic"}
 
+# 文件信息并发数：Worktile 限流较严格，并发过高（如 8）易触发 429，
+# 调小到 3 既够用又更稳，尤其当一条评论带多个附件需并发查文件名时。
+_MAX_FILE_INFO_WORKERS = 3
+
 # Emoji shortcode → unicode 字符
 # Worktile 评论里的 emoji 节点使用 Slack-style shortcode（如 "joy"、"tada"），
 # 这里用 Python `emoji` 库做转换（库内 EMOJI_DATA 的 alias 字段覆盖了 Slack/GitHub 常用 shortcode）。
@@ -272,7 +276,11 @@ class WorktileClient:
         self._token = token
         return token
 
-    def _req(self, method, path, params=None, json=None):
+    # 可重试的 HTTP 状态码：限流 + 上游临时故障。4xx 业务错误（401/403/404）不重试。
+    _RETRYABLE_STATUS = frozenset((429, 500, 502, 503, 504))
+    _MAX_RETRIES = 3
+
+    def _req(self, method, path, params=None, json=None, _attempt=0):
         def _do_request(token):
             p = dict(params or {})
             p["access_token"] = token
@@ -310,6 +318,17 @@ class WorktileClient:
             new_token = self._ensure_token()
             resp = _do_request(new_token)
 
+        # ---- 429 / 5xx 退避重试 ----
+        # Worktile 偶发限流（429）或上游 5xx，多为瞬时故障；直接重试通常能恢复，
+        # 比把错误直接抛给前端友好得多。优先尊重 Retry-After，缺失则用指数退避。
+        if resp.status_code in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
+            wait = self._backoff_seconds(resp, _attempt)
+            print(f"[worktile] {resp.status_code} {path} 触发退避重试 "
+                  f"({_attempt + 1}/{self._MAX_RETRIES})，等待 {wait:.1f}s",
+                  flush=True)
+            time.sleep(wait)
+            return self._req(method, path, params=params, json=json, _attempt=_attempt + 1)
+
         if resp.status_code >= 400:
             # ⚠️ 反爬/限流/临时维护页：Worktile 偶发用 HTML 响应 4xx/5xx
             # （常见 429 Too Many Requests 直接返 nginx 限流页）。如果不识别就把整页 HTML
@@ -330,6 +349,34 @@ class WorktileClient:
                 msg = f"接口错误 {resp.status_code} {path}：{body_preview}"
             raise RuntimeError(msg)
         return resp.json()
+
+    @staticmethod
+    def _backoff_seconds(resp, attempt):
+        """计算重试前的等待秒数。
+
+        - 优先读取 Retry-After：
+          · 数值形式 → 直接当秒数（封顶 30s，避免被异常值卡死）
+          · HTTP-date 形式（如 `Wed, 21 Oct 2015 07:28:00 GMT`）→ 取到点的剩余秒数
+        - 都没有 → 指数退避 2**attempt（1s, 2s, 4s…），封顶 30s
+        """
+        raw = (resp.headers.get("Retry-After") or "").strip()
+        if raw:
+            try:
+                secs = float(raw)
+                if secs >= 0:
+                    return min(secs, 30.0)
+            except ValueError:
+                pass
+            try:
+                # %z 不支持 "GMT"，先替换成 "+0000" 再解析
+                s = raw.replace("GMT", "+0000")
+                dt = datetime.strptime(s, "%a, %d %b %Y %H:%M:%S %z")
+                delta = dt.timestamp() - time.time()
+                if delta > 0:
+                    return min(delta, 30.0)
+            except Exception:
+                pass
+        return min(2.0 ** attempt, 30.0)
 
     # ------------------------------------------------------------------ 项目
     def get_projects(self, limit=500):
@@ -827,7 +874,7 @@ class WorktileClient:
                 except Exception:
                     return fid, {"title": fid, "ext": "", "type": None}
 
-            with ThreadPoolExecutor(max_workers=min(8, len(pending))) as pool:
+            with ThreadPoolExecutor(max_workers=min(_MAX_FILE_INFO_WORKERS, len(pending))) as pool:
                 for fid, rec in pool.map(_fetch, pending):
                     self._file_cache[fid] = rec
                     result[fid] = rec
