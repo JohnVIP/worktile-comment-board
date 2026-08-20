@@ -291,30 +291,30 @@ def _pick_desc_with_path(obj, props=None):
     命中路径形如 "detail.desc" / "properties.desc.value" / "properties[heuristic]:longest_string"。
     任何 _extract_desc_value 命中都视为非空（兼容空字符串被过滤），
     因此诊断时能看到「抽到 dict 还是抽到空串」。
+
+    所有路径都过 _looks_like_metadata_value 闸门：纯 hex ID / 链接 / 时间戳等
+    明显是元数据的字符串不会被当作描述，避免「候选键命中但值是 property_id」
+    之类的误判（用户截图反馈：多个测试任务描述列都显示同一串 24hex）。
     """
     if isinstance(obj, dict):
         for k in _DESC_KEYS:
             if k in obj and obj[k] is not None:
-                # 先看原始值是否「包含非空文本」，再决定走哪条路径
                 s = _extract_desc_value(obj.get(k))
-                if s:
+                if s and not _looks_like_metadata_value(s):
                     return (f"detail.{k}", s)
-                # 命中了键但抽取为空，把候选结构记录下来用于诊断
+                # 命中了键但抽取为空/元数据，跳过该键继续找下一个
                 raw = obj.get(k)
                 if isinstance(raw, (dict, list)):
-                    return (f"detail.{k}:empty-after-extract", "")
-                # 字符串是空串或只有空白
-                return (f"detail.{k}:empty-string", "")
+                    continue
+                continue
     if isinstance(props, dict):
         for k in _DESC_KEYS:
             if k in props and props[k] is not None:
                 s = _extract_desc_value(props.get(k))
-                if s:
+                if s and not _looks_like_metadata_value(s):
                     return (f"properties.{k}", s)
-                raw = props.get(k)
-                if isinstance(raw, (dict, list)):
-                    return (f"properties.{k}:empty-after-extract", "")
-                return (f"properties.{k}:empty-string", "")
+                # 命中键但值不可用，继续下一个
+                continue
     if isinstance(props, dict):
         heuristic = _heuristic_desc_from_props(props)
         if heuristic:

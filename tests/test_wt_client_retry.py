@@ -217,6 +217,25 @@ def test_normalize_task_extracts_desc():
          "properties": {"assignee": "u1", "tag": "x"}},
         project_name="P")
     assert t10["desc"] == "", f"无可信描述应返回空串，实际 {t10['desc']!r}"
+    # 11) 候选键命中但值是 hex ID（用户误填 / 接口默认值），应被元数据闸门过滤
+    t11 = c.normalize_task(
+        {"_id": "a11", "title": "T11",
+         "properties": {"description": "61a7966411b2e46844c8c71f"}},
+        project_name="P")
+    assert t11["desc"] == "", \
+        f"候选键命中但值是 24hex ID 应被过滤，实际 {t11['desc']!r}"
+    # 12) 候选键命中但值是纯链接也应被过滤
+    t12 = c.normalize_task(
+        {"_id": "a12", "title": "T12",
+         "properties": {"desc": "https://example.com/x"}},
+        project_name="P")
+    assert t12["desc"] == "", f"纯链接不应当描述，实际 {t12['desc']!r}"
+    # 13) 但真正可用的 desc 字段嵌套 hex 内容仍应保留
+    t13 = c.normalize_task(
+        {"_id": "a13", "title": "T13",
+         "properties": {"desc": {"value": "Tips这是一段正常描述"}}},
+        project_name="P")
+    assert t13["desc"].startswith("Tips"), f"正常 desc 应保留，实际 {t13['desc']!r}"
 
 
 def test_extract_desc_value_robust():
