@@ -1348,7 +1348,7 @@ const COLS_META = [
   { key: "title",    label: "任务名称",     width: 270,               mode: "auto"  },
   { key: "desc",     label: "描述",        width: 240,               mode: "fixed" },
   { key: "status",   label: "状态",        width: 90,                mode: "auto"  },
-  { key: "start",    label: "开始时间",     width: 120,               mode: "auto"  },
+  { key: "start",    label: "开始时间",     width: 170,               mode: "auto"  },
   { key: "owner",    label: "任务负责人",   width: 130,               mode: "auto"  },
   { key: "due",      label: "截止时间",     width: 150,               mode: "auto"  },  // 仅「延期任务」视图显示
   { key: "overdue",  label: "逾期天数",     width: 90,                mode: "auto"  },  // 仅「延期任务」视图显示
@@ -1362,7 +1362,7 @@ const COL_MIN_WIDTH = 36;
 
 const COLUMN_CONFIG_KEY = "wt-board:column-config:v2";   // v2: 增加 modes 字段
 const COL_WIDTHS_KEY    = "wt-board:col-widths:v2";      // 沿用 v2 键；索引按渲染时的当前 col 下标
-const COL_WIDTHS_SCHEMA = 4;                             // 列宽存储 schema：v3 起附带 __schema 字段以利迁移；v4 新增 状态/开始时间 两列
+const COL_WIDTHS_SCHEMA = 5;                             // 列宽存储 schema：v4 新增 状态/开始时间 两列；v5 开始时间格式改 年月日时分秒（默认列宽加宽）
 const DEFAULT_COL_ORDER = COLS_META.map(c => c.key);
 const DEFAULT_COL_WIDTHS = Object.fromEntries(COLS_META.map(c => [c.key, c.width]));
 

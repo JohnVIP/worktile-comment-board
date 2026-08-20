@@ -1176,7 +1176,7 @@ class WorktileClient:
             "desc_images": desc_images,
             "status": status,
             "start_at": start_at,
-            "start_at_str": _ts_to_str(start_at, full=False),
+            "start_at_str": _ts_to_str(start_at, full=True),  # 年月日时分秒
             "project_id": project_id,
             "project_name": project_name,
             "assignee": assignee,
