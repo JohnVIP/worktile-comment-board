@@ -33,7 +33,11 @@ def make_client():
 
 
 def _patch_request(seq):
-    """返回一个 (patcher, calls) —— requests.request 按 seq 顺序返回 FakeResp。"""
+    """返回一个 (patcher, calls) —— Session.request 按 seq 顺序返回 FakeResp。
+
+    wt_client 现在用 self._session.request（trust_env=False 的 Session），所以
+    直接 patch Session 类的 request 方法，覆盖所有 Session 实例。
+    """
     calls = {"n": 0}
 
     def fake_request(*a, **k):
@@ -41,7 +45,8 @@ def _patch_request(seq):
         calls["n"] += 1
         return seq[i]
 
-    patcher = mock.patch.object(wt_client.requests, "request", side_effect=fake_request)
+    patcher = mock.patch.object(wt_client.requests.Session, "request",
+                                side_effect=fake_request)
     return patcher, calls
 
 

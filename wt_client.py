@@ -253,6 +253,12 @@ class WorktileClient:
         self.base_url = (base_url or "https://dev.worktile.com").rstrip("/")
         self._token = None
         self._file_cache = {}      # file_id -> {"title", "ext", "type"} 实例级缓存
+        # 强制不走系统代理：trust_env=False 让 requests 忽略 HTTP_PROXY/HTTPS_PROXY/NO_PROXY
+        # 等环境变量。Worktile API（dev.worktile.com）走公网直连即可，本地代理
+        # （如 127.0.0.1:10808 沙箱代理）一旦未起，所有调用立刻被拒，
+        # 导致认证/拉数据全挂。直连最稳。
+        self._session = requests.Session()
+        self._session.trust_env = False
 
     # ------------------------------------------------------------------ 认证
     def _ensure_token(self):
@@ -260,7 +266,7 @@ class WorktileClient:
             return self._token
         url = f"{self.base_url}/open-api/tenant-access-token"
         try:
-            resp = requests.post(
+            resp = self._session.post(
                 url,
                 json={"client_id": self.client_id, "client_secret": self.client_secret},
                 timeout=30,
@@ -286,7 +292,7 @@ class WorktileClient:
             p["access_token"] = token
             url = f"{self.base_url}/open-api{path}"
             try:
-                resp = requests.request(method, url, params=p, json=json, timeout=timeout)
+                resp = self._session.request(method, url, params=p, json=json, timeout=timeout)
             except requests.exceptions.RequestException as e:
                 raise RuntimeError(f"接口请求失败 {path}：{e}")
             return resp
