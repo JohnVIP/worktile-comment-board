@@ -270,6 +270,21 @@ def _heuristic_desc_from_props(props):
     return best
 
 
+# markdown 图片/链接清理（描述值常带 ![alt](url) 原文，看板列显示纯文本更友好）
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+
+
+def _clean_desc_text(s):
+    """把描述文本里的 markdown 图片/链接语法压成纯文本，并合并多余空行。"""
+    if not s:
+        return s
+    s = _MD_IMAGE_RE.sub("", s)          # ![alt](url) → 移除（图片不看板展示）
+    s = _MD_LINK_RE.sub(r"\1", s)        # [text](url) → text
+    s = re.sub(r"\n{3,}", "\n\n", s)     # 3+ 连续空行压成 1 个空行
+    return s.strip()
+
+
 def _pick_desc_with_path(obj, props=None):
     """同 _pick_desc_from_obj，但同时返回 (命中路径, 文本)。
 
@@ -939,7 +954,7 @@ class WorktileClient:
         # 用 _pick_desc_from_obj 统一处理：先按 _DESC_KEYS 顺序尝试（每一步都
         # 用 _extract_desc_value 兼容嵌套），命中即返回；都未命中再在 properties
         # 里做兜底扫描（排除元数据键，挑最长最像描述的字符串）。
-        desc = _pick_desc_from_obj(task, props)
+        desc = _clean_desc_text(_pick_desc_from_obj(task, props))
         return {
             "task_id": task_id,
             "identifier": identifier,
@@ -982,7 +997,11 @@ class WorktileClient:
             "error": None,
         }
         try:
-            data = self._req("GET", f"/mission/tasks/{task_id}")
+            # 关键：详情接口必须显式传 columns=properties 才返回 properties 字段
+            # （不传时只回 _id/title；desc 藏在 properties.desc.value 里）。
+            # 实测验证：GET /mission/tasks/{id}?columns=properties → properties.desc.value
+            data = self._req("GET", f"/mission/tasks/{task_id}",
+                             params={"columns": "properties"})
         except Exception as e:
             audit["error"] = f"{type(e).__name__}: {e}"
             _record_desc_audit(audit)
@@ -1016,6 +1035,7 @@ class WorktileClient:
             pass
         # 真正抽取（带命中路径，便于诊断）
         hit_path, desc = _pick_desc_with_path(detail, props)
+        desc = _clean_desc_text(desc)  # 清掉 ![alt](url) 等 markdown 语法，看板显示纯文本
         if desc:
             audit["ok"] = True
             audit["desc_len"] = len(desc)

@@ -267,6 +267,52 @@ def test_enrich_tasks_with_desc():
         assert c.enrich_tasks_with_desc([]) == (0, 0)
 
 
+def test_get_task_desc_passes_columns_param():
+    """根因回归：详情接口必须传 columns=properties 才返回 properties（desc 藏在里面）。"""
+    c = make_client()
+    captured = {}
+
+    def fake_req(method, path, params=None, json=None, **kw):
+        captured["path"] = path
+        captured["params"] = params
+        # 模拟真实结构：data.value.properties.desc.value
+        return {
+            "code": 200,
+            "data": {"value": {
+                "_id": "t1",
+                "title": "任务",
+                "properties": {
+                    "desc": {
+                        "property_id": "p1",
+                        "value": "【Tips】：通过屏幕左侧功能导航，可邀请您的同事加入 Worktile 。\n\n![08.gif](https://wt-box.worktile.com/x.gif)",
+                        "updated_by": None,
+                        "updated_at": 1652786254,
+                    }
+                },
+            }},
+        }
+
+    with mock.patch.object(c, "_req", side_effect=fake_req):
+        desc = c._get_task_desc("t1")
+    assert captured["path"] == "/mission/tasks/t1", f"请求路径，实际 {captured.get('path')!r}"
+    assert (captured.get("params") or {}).get("columns") == "properties", \
+        f"必须传 columns=properties，实际 {captured.get('params')!r}"
+    assert desc.startswith("【Tips】：通过屏幕左侧"), f"应抽到描述文本，实际 {desc!r}"
+    assert "![" not in desc and "wt-box.worktile.com" not in desc, f"markdown 图片应被清理，实际 {desc!r}"
+
+
+def test_clean_desc_text():
+    """markdown 清理：图片移除、链接留文字、空行压缩。"""
+    cd = wt_client._clean_desc_text
+    assert cd("![08.gif](https://x.com/a.gif)") == ""
+    assert cd("前文\n\n![img](https://x.com/a.gif)\n后文") == "前文\n\n后文"
+    assert cd("[官网](https://x.com)") == "官网"
+    assert cd("A\n\n\n\n\nB") == "A\n\nB"
+    assert cd("  纯文本  ") == "纯文本"
+    assert cd("") == ""
+    assert cd(None) is None
+
+
 if __name__ == "__main__":
     test_retry_429_then_ok()
     test_retry_after_header()
@@ -277,4 +323,6 @@ if __name__ == "__main__":
     test_normalize_task_extracts_desc()
     test_extract_desc_value_robust()
     test_enrich_tasks_with_desc()
-    print("全部 9 个重试/字段测试通过 ✓")
+    test_get_task_desc_passes_columns_param()
+    test_clean_desc_text()
+    print("全部 11 个重试/字段测试通过 ✓")
