@@ -185,6 +185,9 @@ def _extract_desc_value(raw):
     if isinstance(raw, bool):
         return ""
     if isinstance(raw, (int, float)):
+        # 数字 0 / 0.0 不是描述（用户截图反馈：测试任务描述列显示「0」）
+        if raw == 0:
+            return ""
         return str(raw).strip()
     if isinstance(raw, dict):
         # 优先按已知嵌套键递归（覆盖 {"value": "..."} 等真实结构）
@@ -233,6 +236,9 @@ def _looks_like_metadata_value(s):
         return True
     # 纯链接
     if re.fullmatch(r"https?://\S+", t):
+        return True
+    # 纯数字（"0" / "0.0" / "12" / "-3.14"）—— 不是描述，用户截图「描述列显示 0」
+    if re.fullmatch(r"-?\d+(\.\d+)?%?", t):
         return True
     return False
 

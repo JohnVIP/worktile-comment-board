@@ -261,6 +261,49 @@ def test_extract_desc_value_robust():
     assert wt_client._extract_desc_value(["", "   ", "real"]) == "real"
     # bool 不当作数字
     assert wt_client._extract_desc_value(True) == ""
+    # 数字 0 不是描述（用户截图反馈：描述列显示「0」）
+    assert wt_client._extract_desc_value(0) == ""
+    assert wt_client._extract_desc_value(0.0) == ""
+    # 非零数字正常转字符串（兼容某些 description 字段存评分数字）
+    assert wt_client._extract_desc_value(1.5) == "1.5"
+    # 嵌套 dict 里包含数字 0 也应被识别为空
+    assert wt_client._extract_desc_value({"value": 0}) == ""
+
+
+def test_looks_like_metadata_value_zero():
+    """元数据闸门：纯数字（含 0）应被识别为元数据。"""
+    md = wt_client._looks_like_metadata_value
+    assert md("0") is True, f"'0' 应为元数据"
+    assert md("0.0") is True, f"'0.0' 应为元数据"
+    assert md("12") is True, f"'12' 应为元数据"
+    assert md("-3.14") is True, f"'-3.14' 应为元数据"
+    assert md("50%") is True, f"'50%' 应为元数据"
+    # 真描述不应被误判
+    assert md("正常的描述文字") is False, f"真描述不应判为元数据"
+    assert md("Tips提示") is False, f"短文本不应判为元数据"
+    # 已有规则保持：hex ID / 链接 / ISO 时间仍为元数据
+    assert md("61a7966411b2e46844c8c71f") is True
+    assert md("https://example.com/x") is True
+
+
+def test_normalize_task_filters_zero_desc():
+    """normalize_task：候选键命中但值是数字 0 / 字符串「0」应返回空。"""
+    c = make_client()
+    # 候选键命中 description = 数字 0
+    t1 = c.normalize_task(
+        {"_id": "b1", "title": "T1", "properties": {"description": 0}},
+        project_name="P")
+    assert t1["desc"] == "", f"数字 0 应被过滤，实际 {t1['desc']!r}"
+    # 候选键命中 description = 字符串 "0"
+    t2 = c.normalize_task(
+        {"_id": "b2", "title": "T2", "properties": {"description": "0"}},
+        project_name="P")
+    assert t2["desc"] == "", f"字符串 '0' 应被过滤，实际 {t2['desc']!r}"
+    # 候选键命中 desc = 数字 0
+    t3 = c.normalize_task(
+        {"_id": "b3", "title": "T3", "properties": {"desc": 0}},
+        project_name="P")
+    assert t3["desc"] == "", f"desc=0 应被过滤，实际 {t3['desc']!r}"
 
 
 def test_enrich_tasks_with_desc():
@@ -344,4 +387,6 @@ if __name__ == "__main__":
     test_enrich_tasks_with_desc()
     test_get_task_desc_passes_columns_param()
     test_clean_desc_text()
-    print("全部 11 个重试/字段测试通过 ✓")
+    test_looks_like_metadata_value_zero()
+    test_normalize_task_filters_zero_desc()
+    print("全部 13 个重试/字段测试通过 ✓")
