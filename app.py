@@ -639,84 +639,198 @@ def file_proxy(file_id):
     return Response(data, mimetype=ctype)
 
 
-@app.route("/api/export", methods=["GET"])
-def export_excel():
-    """一键导出当前视图 + 筛选条件下的任务（与评论）为 Excel。
+# --------------------------------------------------------------------------- 导出作业（进度轮询）
+# 一键导出耗时较长（全量任务 + 评论），改用「启动任务 → 轮询进度 → 下载」三段式，
+# 让前端能显示真实进度百分比与任务数。作业存内存，单租户单进程场景足够。
+EXPORT_JOBS = {}
+_EXPORT_LOCK = threading.Lock()
 
-    GET /api/export?view=board|overdue&project_id=...&owner=...&keyword=...&with_comments=1
-    - view=overdue：复用 _compute_overdue（已全量、已按 owner 过滤、已按逾期排序）
-    - view=board  ：复用 client._collect_tasks_for_export（全量 + owner + keyword 过滤）
-    - with_comments=0：只导出任务（不生成评论 sheet），更快
-    - 评论并发拉取（max_workers=_MAX_FILE_INFO_WORKERS）复用 429 退避重试
-    - project_id=__all__ 表示跨全部项目（耗时较长，已在 README 标注）
-    """
-    s = _require_session()
-    view = (request.args.get("view") or "board").strip()
+
+def _normalize_export_params(s, view, raw_pid, owner, keyword, with_comments):
+    """统一解析并校验导出参数（GET 同步接口与 POST start 共用）。"""
+    view = (view or "board").strip()
     if view not in ("board", "overdue"):
         view = "board"
-    raw_pid = request.args.get("project_id", "__all__") or "__all__"
+    raw_pid = raw_pid or "__all__"
     valid_ids = {p["id"] for p in s["projects"]}
     project_id = raw_pid if (raw_pid == "__all__" or raw_pid in valid_ids) else "__all__"
-    owner_filter = (request.args.get("owner") or "").strip() or None
-    keyword = (request.args.get("keyword") or "").strip()
-    with_comments = request.args.get("with_comments", "1") != "0"
+    owner_filter = (owner or "").strip() or None
+    keyword = (keyword or "").strip()
+    # with_comments 可能是 bool（POST JSON）或字符串（GET）：统一成 bool
+    with_comments = not (with_comments in (False, 0, "0"))
+    return view, project_id, owner_filter, keyword, with_comments
+
+
+def _run_export(s, view, project_id, owner_filter, keyword, with_comments, job=None):
+    """核心导出逻辑；job 非空时实时上报进度（status/phase/计数）。"""
+    def _progress(**kw):
+        if job is not None:
+            job.update(kw)
 
     member_map = _ensure_member_map(s)
     now = time.time()
+    _progress(status="running", phase="tasks", task_count=0,
+              comment_total=0, comment_done=0, error=None)
 
-    try:
-        if view == "overdue":
-            tasks, _diag = _compute_overdue(
-                s, member_map, now, project_id, owner_filter=owner_filter)
-        else:
-            tasks = s["client"]._collect_tasks_for_export(
-                s["projects"], project_id, owner_filter, keyword, member_map)
+    if view == "overdue":
+        tasks, _diag = _compute_overdue(
+            s, member_map, now, project_id, owner_filter=owner_filter)
+    else:
+        tasks = s["client"]._collect_tasks_for_export(
+            s["projects"], project_id, owner_filter, keyword, member_map)
 
-        comment_rows = []
-        if with_comments:
-            tids = [t["task_id"] for t in tasks if t.get("task_id")]
-            comment_map = s["client"].fetch_all_comments(tids, member_map=member_map)
-            for t in tasks:
-                tid = t.get("task_id")
-                comments = comment_map.get(tid, [])
-                t["_comment_count"] = len(comments)
-                for cm in comments:
-                    comment_rows.append({
-                        "task_id": tid,
-                        "title": t.get("title", ""),
-                        "project_name": t.get("project_name", ""),
-                        "author": cm.get("author", ""),
-                        "created_at_str": cm.get("created_at_str", ""),
-                        "content": cm.get("content", ""),
-                        "attachments": cm.get("attachments", []),
-                    })
-        else:
-            for t in tasks:
-                t["_comment_count"] = 0
+    task_count = len(tasks)
+    _progress(task_count=task_count)
 
-        task_rows = [{
-            "task_id": t.get("task_id", ""),
-            "identifier": t.get("identifier", ""),
-            "title": t.get("title", ""),
-            "project_name": t.get("project_name", ""),
-            "assignee": t.get("assignee", ""),
-            "is_completed": t.get("is_completed", False),
-            "updated_at_str": t.get("updated_at_str", ""),
-            "due_at_str": t.get("due_at_str", ""),
-            "overdue_days": t.get("overdue_days"),
-            "comment_count": t.get("_comment_count", 0),
-        } for t in tasks]
+    comment_rows = []
+    if with_comments:
+        _progress(phase="comments", comment_total=task_count, comment_done=0)
+        tids = [t["task_id"] for t in tasks if t.get("task_id")]
+        comment_map = s["client"].fetch_all_comments(
+            tids, member_map=member_map,
+            on_progress=lambda d, tot: (job.update(comment_done=d, comment_total=tot)
+                                        if job is not None else None))
+        for t in tasks:
+            tid = t.get("task_id")
+            comments = comment_map.get(tid, [])
+            t["_comment_count"] = len(comments)
+            for cm in comments:
+                comment_rows.append({
+                    "task_id": tid,
+                    "title": t.get("title", ""),
+                    "project_name": t.get("project_name", ""),
+                    "author": cm.get("author", ""),
+                    "created_at_str": cm.get("created_at_str", ""),
+                    "content": cm.get("content", ""),
+                    "attachments": cm.get("attachments", []),
+                })
+    else:
+        for t in tasks:
+            t["_comment_count"] = 0
 
-        xlsx_bytes, _sheets = build_workbook(task_rows, comment_rows, with_comments)
-    except RuntimeError as e:
-        return jsonify({"ok": False, "error": str(e)}), 502
+    task_rows = [{
+        "task_id": t.get("task_id", ""),
+        "identifier": t.get("identifier", ""),
+        "title": t.get("title", ""),
+        "project_name": t.get("project_name", ""),
+        "assignee": t.get("assignee", ""),
+        "is_completed": t.get("is_completed", False),
+        "updated_at_str": t.get("updated_at_str", ""),
+        "due_at_str": t.get("due_at_str", ""),
+        "overdue_days": t.get("overdue_days"),
+        "comment_count": t.get("_comment_count", 0),
+    } for t in tasks]
 
+    _progress(phase="build")
+    xlsx_bytes, _sheets = build_workbook(task_rows, comment_rows, with_comments)
     ts = time.strftime("%Y%m%d_%H%M%S")
     filename = f"worktile_{view}_{ts}.xlsx"
+    return xlsx_bytes, filename, task_count, len(comment_rows)
+
+
+def _export_worker(s, view, project_id, owner_filter, keyword, with_comments, job_id):
+    """后台线程：执行导出并把结果/进度写回作业表。"""
+    job = EXPORT_JOBS.get(job_id)
+    try:
+        xlsx_bytes, filename, task_count, comment_count = _run_export(
+            s, view, project_id, owner_filter, keyword, with_comments, job=job)
+        job.update(status="done", result=xlsx_bytes, filename=filename,
+                   task_count=task_count, comment_count=comment_count)
+    except RuntimeError as e:
+        job.update(status="error", error=str(e))
+    except Exception as e:  # noqa: BLE001
+        job.update(status="error", error=f"导出失败：{e}")
+
+
+@app.route("/api/export", methods=["GET"])
+def export_excel():
+    """（兼容接口）一键导出当前视图 + 筛选条件下的任务（与评论）为 Excel。
+
+    同步返回文件，等价于 start→progress→download 的同步版本；前端已改用异步三段式。
+    """
+    s = _require_session()
+    view = request.args.get("view", "board")
+    raw_pid = request.args.get("project_id", "__all__")
+    owner = request.args.get("owner")
+    keyword = request.args.get("keyword")
+    with_comments = request.args.get("with_comments", "1")
+    view, project_id, owner_filter, keyword, with_comments = _normalize_export_params(
+        s, view, raw_pid, owner, keyword, with_comments)
+    try:
+        xlsx_bytes, filename, _tc, _cc = _run_export(
+            s, view, project_id, owner_filter, keyword, with_comments)
+    except RuntimeError as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
     resp = make_response(xlsx_bytes)
     resp.headers["Content-Type"] = (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     resp.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return resp
+
+
+@app.route("/api/export/start", methods=["POST"])
+def export_start():
+    """启动一个异步导出作业，返回 job_id；前端轮询 /api/export/progress 获取进度。"""
+    s = _require_session()
+    body = request.get_json(silent=True) or {}
+    view = body.get("view", "board")
+    raw_pid = body.get("project_id", "__all__")
+    owner = body.get("owner")
+    keyword = body.get("keyword")
+    with_comments = body.get("with_comments", True)
+    view, project_id, owner_filter, keyword, with_comments = _normalize_export_params(
+        s, view, raw_pid, owner, keyword, with_comments)
+
+    job_id = secrets.token_hex(8)
+    job = {"status": "running", "phase": "tasks", "task_count": 0,
+           "comment_total": 0, "comment_done": 0, "error": None,
+           "result": None, "filename": None, "comment_count": 0}
+    with _EXPORT_LOCK:
+        EXPORT_JOBS[job_id] = job
+    threading.Thread(
+        target=_export_worker,
+        args=(s, view, project_id, owner_filter, keyword, with_comments, job_id),
+        daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id})
+
+
+@app.route("/api/export/progress", methods=["GET"])
+def export_progress():
+    """轮询导出进度；返回 status/phase/计数（真实任务数与评论拉取进度）。"""
+    job_id = request.args.get("job_id")
+    job = EXPORT_JOBS.get(job_id)
+    if not job:
+        return jsonify({"ok": False, "error": "导出任务不存在或已过期"}), 404
+    return jsonify({
+        "ok": True,
+        "status": job["status"],
+        "phase": job["phase"],
+        "task_count": job["task_count"],
+        "comment_total": job["comment_total"],
+        "comment_done": job["comment_done"],
+        "comment_count": job.get("comment_count", 0),
+        "error": job["error"],
+        "filename": job["filename"],
+    })
+
+
+@app.route("/api/export/download", methods=["GET"])
+def export_download():
+    """导出完成后按 job_id 取回 xlsx 文件；下载后清理作业释放内存。"""
+    job_id = request.args.get("job_id")
+    job = EXPORT_JOBS.get(job_id)
+    if not job:
+        return jsonify({"ok": False, "error": "导出任务不存在或已过期"}), 404
+    if job["status"] == "error":
+        return jsonify({"ok": False, "error": job["error"]}), 502
+    if job["status"] != "done":
+        return jsonify({"ok": False, "error": "导出尚未完成"}), 409
+    resp = make_response(job["result"])
+    resp.headers["Content-Type"] = (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    resp.headers["Content-Disposition"] = f'attachment; filename="{job["filename"]}"'
+    with _EXPORT_LOCK:
+        EXPORT_JOBS.pop(job_id, None)
     return resp
 
 

@@ -16,7 +16,7 @@ import re
 import requests
 import time
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".heic"}
 
@@ -837,18 +837,27 @@ class WorktileClient:
             out.append(t)
         return out
 
-    def fetch_all_comments(self, task_ids, member_map=None):
+    def fetch_all_comments(self, task_ids, member_map=None, on_progress=None):
         """并发拉取多个任务的评论，返回 {task_id: comments_list}。
 
         复用 get_task_comments（已含 401 刷新 + 429/5xx 退避重试 + 文件信息补全）。
         并发上限沿用 _MAX_FILE_INFO_WORKERS，避免「全量任务 + 评论」导出时触发限流。
         单条任务失败不影响其他，降级为该 task_id 对应空列表。
+
+        on_progress(done, total)：可选回调，每完成一个任务调用一次（用于导出进度条）。
+        不做实时上报的场景传 None 即可，行为不变。
         """
         member_map = member_map or {}
         result = {}
         if not task_ids:
+            if on_progress:
+                on_progress(0, 0)
             return result
         ids = list(task_ids)
+        total = len(ids)
+        done = 0
+        if on_progress:
+            on_progress(0, total)
 
         def _fetch(tid):
             try:
@@ -856,9 +865,14 @@ class WorktileClient:
             except Exception:
                 return tid, []
 
-        with ThreadPoolExecutor(max_workers=min(_MAX_FILE_INFO_WORKERS, len(ids))) as pool:
-            for tid, comments in pool.map(_fetch, ids):
+        with ThreadPoolExecutor(max_workers=min(_MAX_FILE_INFO_WORKERS, total)) as pool:
+            futures = {pool.submit(_fetch, tid): tid for tid in ids}
+            for fut in as_completed(futures):
+                tid, comments = fut.result()
                 result[tid] = comments
+                done += 1
+                if on_progress:
+                    on_progress(done, total)
         return result
 
     @staticmethod

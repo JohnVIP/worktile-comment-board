@@ -177,5 +177,52 @@ def test_export_route_overdue_owner_filter():
     assert wb["任务"].max_row == 1
 
 
+# --------------------------------------------------------------------------- 5. 异步作业流（进度轮询 + 下载）
+def test_export_job_flow():
+    """start → progress(轮询至 done) → download，校验进度计数与最终 xlsx。"""
+    import time as _t  # noqa: E402
+
+    fake_client = FakeClient()
+    fake_session = {
+        "projects": [{"id": "P1", "name": "项目P1"}],
+        "client": fake_client,
+        "member_map": {},
+    }
+    app_module._require_session = lambda: fake_session
+    client = app_module.app.test_client()
+
+    # 启动异步作业（board + 含评论）
+    r = client.post("/api/export/start",
+                    json={"view": "board", "project_id": "P1", "with_comments": True})
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["ok"] and data["job_id"]
+    job_id = data["job_id"]
+
+    # 轮询直到完成（后台线程，固定假数据很快）
+    final = None
+    for _ in range(50):
+        p = client.get(f"/api/export/progress?job_id={job_id}").get_json()
+        if p["status"] in ("done", "error"):
+            final = p
+            break
+        _t.sleep(0.1)
+    assert final is not None, "导出作业未在预期时间内完成"
+    assert final["status"] == "done", final.get("error")
+    assert final["task_count"] == 4
+    assert final["comment_count"] == 4  # 每个任务 1 条评论，进度回调应累计到 4
+
+    # 下载文件并校验为合法 xlsx（任务 + 评论 两个 sheet）
+    dl = client.get(f"/api/export/download?job_id={job_id}")
+    assert dl.status_code == 200
+    assert dl.data[:2] == b"PK"
+    wb = load_workbook(io.BytesIO(dl.data))
+    assert wb.sheetnames == ["任务", "评论"]
+
+    # 下载后作业应被清理：progress 查询返回 404
+    p2 = client.get(f"/api/export/progress?job_id={job_id}")
+    assert p2.status_code == 404
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
