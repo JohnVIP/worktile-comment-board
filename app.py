@@ -21,7 +21,7 @@ from flask import (
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
 from cryptography.fernet import Fernet
-from wt_client import WorktileClient
+from wt_client import WorktileClient, _pick_desc_from_obj, _pick_desc_with_path, get_desc_audit_snapshot
 from exporter import build_workbook
 
 app = Flask(__name__)
@@ -635,6 +635,25 @@ def debug_comments_raw(task_id):
     return jsonify({"ok": True, "data": data})
 
 
+@app.route("/api/debug/desc-audit", methods=["GET"])
+def debug_desc_audit():
+    """调试：列出 desc 抽取最近若干次诊断（环形缓冲，最多 30 条）。
+
+    每条包含：
+    - task_id: Worktile 任务 ID
+    - ok: 是否抽到非空文本
+    - hit_path: 命中字段路径（detail.desc / properties.desc / 启发式扫描等）
+    - hit_value_preview: 抽到的文本前 120 字
+    - top_keys: 任务详情顶层键
+    - props_keys: properties 字典里的键
+    - props_desc_summary: properties.desc / description 的结构摘要
+
+    用法：先在浏览器访问 / 重启 enrich，再 curl /api/debug/desc-audit 看真实结构。
+    """
+    snap = get_desc_audit_snapshot(limit=30)
+    return jsonify({"ok": True, "count": len(snap), "items": snap})
+
+
 @app.route("/api/debug/task-detail/<task_id>", methods=["GET"])
 def debug_task_detail(task_id):
     """调试：拉任务详情返回关键结构摘要（仅看 desc 在哪里）。
@@ -667,7 +686,7 @@ def debug_task_detail(task_id):
         for src_label, src in (("top", detail), ("props", props)):
             if isinstance(src, dict) and k in src and src[k] is not None:
                 v = src[k]
-                vp = WorktileClient._pick_desc_from_obj({k: v})  # 复用解析
+                vp = _pick_desc_from_obj({k: v})  # 复用解析
                 candidate_preview[f"{src_label}.{k}"] = {
                     "raw_type": type(v).__name__,
                     "raw_preview": (str(v)[:200] + "…") if isinstance(v, str) and len(str(v)) > 200 else v

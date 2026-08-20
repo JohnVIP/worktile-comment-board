@@ -15,7 +15,9 @@ import mimetypes
 import os
 import re
 import requests
+import threading
 import time
+from collections import deque
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -116,6 +118,54 @@ _DESC_KEYS = (
     "desc", "description", "content", "body", "note", "remark",
     "summary", "detail", "intro", "text", "post",
 )
+
+# 诊断环形缓冲：每次 _get_task_desc 都把「详情顶层 keys + properties 摘要 + 是否命中」
+# 记录到这里，便于未命中时一眼看到真实结构。环形 deque 上限 30 条，线程安全。
+_DESC_AUDIT_LOCK = threading.Lock()
+_DESC_AUDIT = deque(maxlen=30)
+
+
+def _record_desc_audit(entry):
+    """把一条 desc 抽取诊断写入内存环形缓冲。"""
+    with _DESC_AUDIT_LOCK:
+        _DESC_AUDIT.append(entry)
+
+
+def get_desc_audit_snapshot(limit=30):
+    """读取 desc 诊断环形缓冲的快照（按写入顺序），供调试接口展示。"""
+    with _DESC_AUDIT_LOCK:
+        items = list(_DESC_AUDIT)
+    return items[-limit:]
+
+
+def _summarize_for_desc_audit(value, depth=0, max_depth=3):
+    """把详情响应里某个字段的可视摘要压缩成字符串，避免打印超长 HTML/markdown。"""
+    if depth > max_depth:
+        return "..."
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if len(s) > 60:
+            return f"str[{len(s)}]: {s[:60]}…"
+        return f"str[{len(s)}]: {s!r}"
+    if isinstance(value, list):
+        head = [_summarize_for_desc_audit(v, depth + 1, max_depth) for v in value[:3]]
+        more = "" if len(value) <= 3 else f"…({len(value)} items)"
+        return f"list[{len(value)}]:[{', '.join(head)}{more}]"
+    if isinstance(value, dict):
+        parts = []
+        for i, (k, v) in enumerate(value.items()):
+            if i >= 6:
+                parts.append("…")
+                break
+            parts.append(f"{k}={_summarize_for_desc_audit(v, depth + 1, max_depth)}")
+        return "{" + ", ".join(parts) + "}"
+    return type(value).__name__
 
 
 def _extract_desc_value(raw):
@@ -220,29 +270,51 @@ def _heuristic_desc_from_props(props):
     return best
 
 
+def _pick_desc_with_path(obj, props=None):
+    """同 _pick_desc_from_obj，但同时返回 (命中路径, 文本)。
+
+    命中路径形如 "detail.desc" / "properties.desc.value" / "properties[heuristic]:longest_string"。
+    任何 _extract_desc_value 命中都视为非空（兼容空字符串被过滤），
+    因此诊断时能看到「抽到 dict 还是抽到空串」。
+    """
+    if isinstance(obj, dict):
+        for k in _DESC_KEYS:
+            if k in obj and obj[k] is not None:
+                # 先看原始值是否「包含非空文本」，再决定走哪条路径
+                s = _extract_desc_value(obj.get(k))
+                if s:
+                    return (f"detail.{k}", s)
+                # 命中了键但抽取为空，把候选结构记录下来用于诊断
+                raw = obj.get(k)
+                if isinstance(raw, (dict, list)):
+                    return (f"detail.{k}:empty-after-extract", "")
+                # 字符串是空串或只有空白
+                return (f"detail.{k}:empty-string", "")
+    if isinstance(props, dict):
+        for k in _DESC_KEYS:
+            if k in props and props[k] is not None:
+                s = _extract_desc_value(props.get(k))
+                if s:
+                    return (f"properties.{k}", s)
+                raw = props.get(k)
+                if isinstance(raw, (dict, list)):
+                    return (f"properties.{k}:empty-after-extract", "")
+                return (f"properties.{k}:empty-string", "")
+    if isinstance(props, dict):
+        heuristic = _heuristic_desc_from_props(props)
+        if heuristic:
+            return ("properties[heuristic]", heuristic)
+    return (None, "")
+
+
 def _pick_desc_from_obj(obj, props=None):
     """从任务对象 + properties 中按候选顺序匹配 desc，命中即返回字符串。
 
     顺序：先已知 desc 候选键（顶层 → properties）→ properties 兜底扫描。
     每一步都用 _extract_desc_value 兼容嵌套。
     """
-    if isinstance(obj, dict):
-        for k in _DESC_KEYS:
-            if k in obj and obj[k] is not None:
-                s = _extract_desc_value(obj.get(k))
-                if s:
-                    return s
-    if isinstance(props, dict):
-        for k in _DESC_KEYS:
-            if k in props and props[k] is not None:
-                s = _extract_desc_value(props.get(k))
-                if s:
-                    return s
-    if isinstance(props, dict):
-        heuristic = _heuristic_desc_from_props(props)
-        if heuristic:
-            return heuristic
-    return ""
+    _, s = _pick_desc_with_path(obj, props)
+    return s
 
 
 def _to_epoch_sec(raw):
@@ -893,10 +965,27 @@ class WorktileClient:
         返回去空白后的描述字符串；任何异常/未命中都返回空串（不影响主流程）。
         详情响应可能有 data / data.value 包裹，统一解开后用 _pick_desc_from_obj
         统一从顶层 + properties 抽取；自动兼容 properties.desc.value 嵌套结构。
+
+        诊断：每次调用都把「详情顶层 keys + properties 摘要 + 命中字段」写进
+        _DESC_AUDIT 环形缓冲，便于 _pick_desc_from_obj 漏命中时一眼定位真实字段名。
         """
+        audit = {
+            "task_id": task_id,
+            "ok": False,
+            "desc_len": 0,
+            "hit_path": None,
+            "hit_value_preview": None,
+            "top_keys": [],
+            "props_keys": [],
+            "props_desc_summary": None,
+            "props_size": 0,
+            "error": None,
+        }
         try:
             data = self._req("GET", f"/mission/tasks/{task_id}")
-        except Exception:
+        except Exception as e:
+            audit["error"] = f"{type(e).__name__}: {e}"
+            _record_desc_audit(audit)
             return ""
         detail = data
         if isinstance(data, dict):
@@ -904,13 +993,39 @@ class WorktileClient:
                 inner = data["data"]
                 detail = inner.get("value", inner)
         if not isinstance(detail, dict):
+            audit["error"] = "detail not dict"
+            _record_desc_audit(audit)
             return ""
         props = detail.get("properties") or detail.get("props") or {}
-        desc = _pick_desc_from_obj(detail, props)
-        # 留个单行调试钩子：若启用了 WT_DESC_DEBUG，能看到每条任务命中的具体字段
+        # 诊断：在调用抽取之前先抓详情结构摘要
+        try:
+            audit["top_keys"] = sorted(
+                [k for k in detail.keys() if isinstance(detail.get(k), (str, dict, list))]
+            )[:40]
+        except Exception:
+            pass
+        try:
+            audit["props_size"] = len(props) if isinstance(props, dict) else 0
+            if isinstance(props, dict):
+                audit["props_keys"] = sorted(list(props.keys()))[:40]
+                if "desc" in props:
+                    audit["props_desc_summary"] = _summarize_for_desc_audit(props["desc"])
+                elif "description" in props:
+                    audit["props_desc_summary"] = _summarize_for_desc_audit(props["description"])
+        except Exception:
+            pass
+        # 真正抽取（带命中路径，便于诊断）
+        hit_path, desc = _pick_desc_with_path(detail, props)
+        if desc:
+            audit["ok"] = True
+            audit["desc_len"] = len(desc)
+            audit["hit_path"] = hit_path
+            preview = desc[:120].replace("\n", " ")
+            audit["hit_value_preview"] = preview
+        _record_desc_audit(audit)
+        # 兼容旧版 stderr 钩子
         if not desc and os.environ.get("WT_DESC_DEBUG") == "1":
-            keys_top = sorted([k for k in (detail or {}).keys() if isinstance(detail.get(k), (str, dict, list))])
-            print(f"[wt-desc] {task_id}: empty. top-level keys={keys_top[:30]}", flush=True)
+            print(f"[wt-desc] {task_id}: empty. top-level keys={audit['top_keys'][:30]}", flush=True)
         return desc
 
     def enrich_tasks_with_desc(self, tasks, concurrency=None):
