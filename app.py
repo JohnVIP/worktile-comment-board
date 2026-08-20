@@ -427,6 +427,14 @@ def tasks():
     except RuntimeError as e:
         return jsonify({"ok": False, "error": str(e)}), 502
 
+    # 补全描述：列表接口不带 desc，需逐任务查详情。
+    # 只补当前页子集（≤50 条），并发=_MAX_FILE_INFO_WORKERS(3) 避免 429。
+    items = raw.get("items") or []
+    try:
+        s["client"].enrich_tasks_with_desc(items)
+    except Exception as e:
+        app.logger.warning("enrich_tasks_with_desc failed: %s", e)
+
     if keyword:
         # search_tasks 已对每条任务做规范化（含真实 project_name 与负责人映射）
         items = raw.get("items", [])
@@ -591,6 +599,11 @@ def _compute_overdue(s, member_map, now, project_id="__all__", count_only=False,
         t["overdue_days"] = int((now - due) // 86400)
         collected.append(t)
     if not count_only:
+        # 补全描述：列表接口不带 desc，逐任务查详情（仅已筛出的延期子集）
+        try:
+            s["client"].enrich_tasks_with_desc(collected)
+        except Exception as e:
+            app.logger.warning("enrich overdue desc failed: %s", e)
         # 探测模式跳过 sort：sort 是 O(n log n) 且需要序列化 stable，
         # 探测场景下 total 已经在 collected 长度里，不需要有序
         collected.sort(key=lambda x: x.get("overdue_days", 0), reverse=True)

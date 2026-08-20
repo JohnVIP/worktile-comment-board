@@ -739,6 +739,69 @@ class WorktileClient:
             "_assignee_uid": assignee_uid,         # _ 前缀：仅后端按 uid 过滤时使用（_ 前缀约定前端忽略）
         }
 
+    # ------------------------------------------------------------------ 描述补全
+    def _get_task_desc(self, task_id):
+        """从任务详情接口 /mission/tasks/{task_id} 取 desc（列表接口不含描述字段）。
+
+        返回去空白后的描述字符串；任何异常/未命中都返回空串（不影响主流程）。
+        详情响应可能有 data / data.value 包裹，统一解开后从顶层与 properties 多处兜底。
+        """
+        try:
+            data = self._req("GET", f"/mission/tasks/{task_id}")
+        except Exception:
+            return ""
+        detail = data
+        if isinstance(data, dict):
+            if "data" in data and isinstance(data["data"], dict):
+                inner = data["data"]
+                detail = inner.get("value", inner)
+        if not isinstance(detail, dict):
+            return ""
+        props = detail.get("properties") or detail.get("props") or {}
+        desc = (detail.get("desc")
+                or detail.get("description")
+                or detail.get("content")
+                or detail.get("remark")
+                or detail.get("summary")
+                or props.get("desc")
+                or props.get("description")
+                or props.get("content")
+                or props.get("remark")
+                or props.get("summary")
+                or "")
+        return str(desc).strip() if desc else ""
+
+    def enrich_tasks_with_desc(self, tasks, concurrency=None):
+        """批量补全任务的 desc（列表接口不带描述，需逐任务查详情）。
+
+        原地更新 tasks 中的 dict；返回 (enriched, failed)。
+        - 只对「当前 desc 为空」的任务发起请求，已填值的跳过（幂等）。
+        - concurrency 默认用模块级 _MAX_FILE_INFO_WORKERS（=3），与附件/评论并发一致，避免 429。
+        - 任务量大（如全部项目）时调用方应只传「当前页/当前视图要展示的子集」以控制请求数。
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        if concurrency is None:
+            concurrency = _MAX_FILE_INFO_WORKERS
+        targets = [t for t in tasks
+                   if isinstance(t, dict) and not (t.get("desc") or "").strip()]
+        if not targets:
+            return (0, 0)
+        enriched = 0
+        failed = 0
+        with ThreadPoolExecutor(max_workers=concurrency) as ex:
+            fut_map = {ex.submit(self._get_task_desc, t["task_id"]): t for t in targets}
+            for fut in as_completed(fut_map):
+                t = fut_map[fut]
+                try:
+                    d = fut.result()
+                except Exception:
+                    failed += 1
+                    continue
+                if d:
+                    t["desc"] = d
+                    enriched += 1
+        return (enriched, failed)
+
     # ------------------------------------------------------------------ 评论
     def get_task_comments(self, task_id, member_map=None):
         """获取任务详情中的评论，返回规范化的评论列表（已按时间倒序）"""
@@ -845,6 +908,8 @@ class WorktileClient:
                 if not any(kw in title for kw in kws_lc):
                     continue
             out.append(t)
+        # 补全描述：列表接口不带 desc，需逐任务查详情（导出为全量，耗时较长属预期）
+        self.enrich_tasks_with_desc(out)
         return out
 
     def fetch_all_comments(self, task_ids, member_map=None, on_progress=None):

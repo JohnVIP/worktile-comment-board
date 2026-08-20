@@ -179,6 +179,29 @@ def test_normalize_task_extracts_desc():
     assert t5["desc"] == "", f"desc=None 应为空串，实际 {t5['desc']!r}"
 
 
+def test_enrich_tasks_with_desc():
+    c = make_client()
+    tasks = [
+        {"task_id": "t1", "desc": ""},            # 需补全
+        {"task_id": "t2", "desc": "已有值"},       # 已填值，跳过
+        {"task_id": "t3"},                        # 无 desc key，需补全
+    ]
+    # mock 详情接口：t1 → "详情描述"，t3 → "属性描述"，其它（含已填值的不应被调用）
+    def fake_get(task_id):
+        return {"t1": "详情描述", "t3": "属性描述"}.get(task_id, "")
+    with mock.patch.object(c, "_get_task_desc", side_effect=fake_get):
+        enriched, failed = c.enrich_tasks_with_desc(tasks)
+    assert enriched == 2, f"应补全 2 条（t1/t3），实际 {enriched}"
+    assert failed == 0, f"失败数应为 0，实际 {failed}"
+    assert tasks[0]["desc"] == "详情描述", f"t1 应补全，实际 {tasks[0]['desc']!r}"
+    assert tasks[1]["desc"] == "已有值", f"t2 已填值不应被覆盖，实际 {tasks[1]['desc']!r}"
+    assert tasks[2]["desc"] == "属性描述", f"t3 应补全，实际 {tasks[2]['desc']!r}"
+    # 空列表 / 全部已填 → 不发起请求
+    with mock.patch.object(c, "_get_task_desc", side_effect=AssertionError("不应被调用")):
+        assert c.enrich_tasks_with_desc([{"task_id": "x", "desc": "y"}]) == (0, 0)
+        assert c.enrich_tasks_with_desc([]) == (0, 0)
+
+
 if __name__ == "__main__":
     test_retry_429_then_ok()
     test_retry_after_header()
@@ -187,4 +210,5 @@ if __name__ == "__main__":
     test_exhaust_retries_then_raise()
     test_get_file_stream_retries_429()
     test_normalize_task_extracts_desc()
+    test_enrich_tasks_with_desc()
     print("全部 7 个重试/字段测试通过 ✓")
