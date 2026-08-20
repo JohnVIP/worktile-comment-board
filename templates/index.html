@@ -539,6 +539,42 @@
     transform: scale(1.06);
     box-shadow: 0 2px 8px rgba(15, 23, 42, .18);
   }
+  /* 状态徽章：未开始（灰）/ 进行中（蓝）/ 已完成（绿）/ 已取消（淡灰红）
+     Worktile 自定义状态名优先；下面用 key 做硬编码兜底（中文名匹配）。 */
+  table.proj-table td.cell-status {
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+  table.proj-table td.cell-status .status-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+    line-height: 1.4;
+    font-weight: 500;
+    background: var(--bg-1, #f1f5f9);
+    color: var(--text-2, #64748b);
+    border: 1px solid var(--line-2, #e2e8f0);
+  }
+  table.proj-table td.cell-status .status-badge.is-pending {   /* 未开始 */
+    color: #64748b; background: #f1f5f9; border-color: #e2e8f0;
+  }
+  table.proj-table td.cell-status .status-badge.is-progress { /* 进行中 */
+    color: #1d4ed8; background: #dbeafe; border-color: #bfdbfe;
+  }
+  table.proj-table td.cell-status .status-badge.is-done {     /* 已完成 */
+    color: #047857; background: #d1fae5; border-color: #a7f3d0;
+  }
+  table.proj-table td.cell-status .status-badge.is-cancel {   /* 已取消 / 关 */
+    color: #9f1239; background: #ffe4e6; border-color: #fecdd3;
+  }
+  /* 开始时间：与截止时间同样的紧凑日期格式 */
+  table.proj-table td.cell-start {
+    white-space: nowrap;
+    vertical-align: middle;
+    color: var(--text-2, #64748b);
+    font-variant-numeric: tabular-nums;
+  }
   /* 任务负责人（窄列下不拆字符 + 截断省略号）。
      updated 列单独走两行渲染（日期 + 时间各一段），不在这里命中。
      命中规则必须用 .cell-* class，不能用 nth-last-child(-n+2)，否则列序变动时会误伤其他列。 */
@@ -1311,6 +1347,8 @@ const COLS_META = [
   { key: "code",     label: "任务编号",     width: 110,               mode: "auto"  },
   { key: "title",    label: "任务名称",     width: 270,               mode: "auto"  },
   { key: "desc",     label: "描述",        width: 240,               mode: "fixed" },
+  { key: "status",   label: "状态",        width: 90,                mode: "auto"  },
+  { key: "start",    label: "开始时间",     width: 120,               mode: "auto"  },
   { key: "owner",    label: "任务负责人",   width: 130,               mode: "auto"  },
   { key: "due",      label: "截止时间",     width: 150,               mode: "auto"  },  // 仅「延期任务」视图显示
   { key: "overdue",  label: "逾期天数",     width: 90,                mode: "auto"  },  // 仅「延期任务」视图显示
@@ -1324,7 +1362,7 @@ const COL_MIN_WIDTH = 36;
 
 const COLUMN_CONFIG_KEY = "wt-board:column-config:v2";   // v2: 增加 modes 字段
 const COL_WIDTHS_KEY    = "wt-board:col-widths:v2";      // 沿用 v2 键；索引按渲染时的当前 col 下标
-const COL_WIDTHS_SCHEMA = 3;                             // 列宽存储 schema：v3 起附带 __schema 字段以利迁移；列顺序/默认值变更时 bump 该值
+const COL_WIDTHS_SCHEMA = 4;                             // 列宽存储 schema：v3 起附带 __schema 字段以利迁移；v4 新增 状态/开始时间 两列
 const DEFAULT_COL_ORDER = COLS_META.map(c => c.key);
 const DEFAULT_COL_WIDTHS = Object.fromEntries(COLS_META.map(c => [c.key, c.width]));
 
@@ -2622,7 +2660,7 @@ function updateExportProgress(d){
 
 // ====================== 延期任务视图切换 ======================
 // 逾期视图使用独立的列布局（含 截止时间 / 逾期天数），与主看板布局互不污染
-const OVERDUE_ORDER = ["proj", "code", "title", "desc", "owner", "due", "overdue", "comments", "updated"];
+const OVERDUE_ORDER = ["proj", "code", "title", "desc", "status", "start", "owner", "due", "overdue", "comments", "updated"];
 const OVERDUE_VISIBLE = Object.fromEntries(OVERDUE_ORDER.map(k => [k, true]));
 // proj 列固定 180px（避免长项目名撑宽整表；与用户保存的自定义宽度一致）；
 // 其他列保持 auto（按内容自适应）；只有 comments 是 fixed（中间可拖拽列）。
@@ -2898,6 +2936,29 @@ function renderTable(items){
               + descInner + '</td>';
             break;
           }
+          case "status": {
+            // 任务状态徽章：normalize_task 已转成展示名（task_state.name 优先）
+            // 按 name 关键字判定色系（已完成 / 进行中 / 未开始 / 已取消 / 关）
+            const s = (t.status || "").trim();
+            let cls = "status-badge";
+            if (s) {
+              if (/完成|已结|交付|done|closed|关$/i.test(s))        cls += " is-done";
+              else if (/进行|进行中|progress|doing/i.test(s))       cls += " is-progress";
+              else if (/取消|cancel|报废/i.test(s))                  cls += " is-cancel";
+              else                                                    cls += " is-pending";
+            }
+            html += `<td class="cell-status"${dataMode}${fixStyle}>`
+              + (s ? `<span class="${cls}">${escapeHtml(s)}</span>` : '<span class="cell-empty">—</span>')
+              + '</td>';
+            break;
+          }
+          case "start": {
+            const s = (t.start_at_str || "").trim();
+            html += `<td class="cell-start"${dataMode}${fixStyle}>`
+              + (s && s !== "-" ? escapeHtml(s) : '<span class="cell-empty">—</span>')
+              + '</td>';
+            break;
+          }
           case "comments":
             html += `<td class="cell-comments" data-comments="${escapeHtml(t.task_id)}"${dataMode}${fixStyle}>${commentsHtml}</td>`;
             break;
@@ -3093,6 +3154,28 @@ function renderOverdueTable(items){
           }
           html += `<td class="cell-desc"${dataMode}${fixStyle} title="${escapeHtml(raw)}">`
             + descInner + '</td>';
+          break;
+        }
+        case "status": {
+          // 同主看板：状态徽章色系
+          const s = (t.status || "").trim();
+          let cls = "status-badge";
+          if (s) {
+            if (/完成|已结|交付|done|closed|关$/i.test(s))      cls += " is-done";
+            else if (/进行|进行中|progress|doing/i.test(s))     cls += " is-progress";
+            else if (/取消|cancel|报废/i.test(s))                cls += " is-cancel";
+            else                                                  cls += " is-pending";
+          }
+          html += `<td class="cell-status"${dataMode}${fixStyle}>`
+            + (s ? `<span class="${cls}">${escapeHtml(s)}</span>` : '<span class="cell-empty">—</span>')
+            + '</td>';
+          break;
+        }
+        case "start": {
+          const s = (t.start_at_str || "").trim();
+          html += `<td class="cell-start"${dataMode}${fixStyle}>`
+            + (s && s !== "-" ? escapeHtml(s) : '<span class="cell-empty">—</span>')
+            + '</td>';
           break;
         }
         case "comments":

@@ -523,6 +523,69 @@ def _due_to_epoch(due_raw):
     return _to_epoch_sec(due_raw)
 
 
+def _start_to_epoch(task, props):
+    """把 Worktile 的开始时间统一成秒级 epoch。
+
+    真实结构：properties.start = {"value": {"date": <epoch秒>, "with_time": 0}}
+    （同 due 的嵌套形态，date 是秒级时间戳）。
+    兼容：顶层 start_at / begin_at、扁平时间戳、字符串日期。
+    无法解析返回 None。
+    """
+    raw = (_first(task, ["start_at", "start", "begin_at", "begin"])
+           or _first(props, ["start_at", "start", "begin_at", "begin"]))
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        # {"value": {"date": ts, "with_time": 0}} → value.date
+        v = raw.get("value")
+        if isinstance(v, dict):
+            d = v.get("date")
+            if isinstance(d, (int, float)) and d > 0:
+                return float(d) if d <= 1e11 else float(d) / 1000.0
+            if isinstance(d, str) and d.strip():
+                return _to_epoch_sec(d)
+        elif isinstance(v, (int, float)) and v > 0:
+            return float(v) if v <= 1e11 else float(v) / 1000.0
+        # {"date": ts} 直接形态
+        d = raw.get("date")
+        if isinstance(d, (int, float)) and d > 0:
+            return float(d) if d <= 1e11 else float(d) / 1000.0
+        if isinstance(d, str) and d.strip():
+            return _to_epoch_sec(d)
+        return None
+    return _to_epoch_sec(raw)
+
+
+# 任务状态 type → 展示名（Worktile 常规五态；自定义状态用 task_state.name 覆盖）
+_STATE_TYPE_NAMES = {0: "未开始", 1: "未开始", 2: "进行中", 3: "已完成", 4: "已取消"}
+
+
+def _status_display_name(status_raw, is_completed=False):
+    """把 task_state / state_type 转成展示名。
+
+    优先级：
+    - dict 形态（task_state = {name, type}）→ name（自定义状态名，如「已完成」「测试中」）
+      name 缺失时按 type 映射常规名
+    - int 形态（state_type）→ 按映射表
+    - 兜底：is_completed=True → "已完成"；否则空串（前端显示占位符）
+    """
+    if isinstance(status_raw, dict):
+        name = status_raw.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+        t = status_raw.get("type")
+        if isinstance(t, (int, float)):
+            return _STATE_TYPE_NAMES.get(int(t), str(int(t)))
+        return ""
+    if isinstance(status_raw, bool):
+        return "已完成" if status_raw else ""
+    if isinstance(status_raw, (int, float)):
+        return _STATE_TYPE_NAMES.get(int(status_raw), str(status_raw))
+    if isinstance(status_raw, str) and status_raw.strip():
+        return status_raw.strip()
+    return "已完成" if is_completed else ""
+
+
 def _is_completed(task, props):
     """判断任务是否「已完成 / 已结束」。多候选信号，尽量兼容 Worktile 不同版本。
 
@@ -1100,12 +1163,20 @@ class WorktileClient:
         desc = _clean_desc_text(desc_raw)
         # 描述里的图片 URL（markdown + ProseMirror image 节点），前端渲染缩略图 + lightbox
         desc_images = _extract_desc_images(desc_raw)
+        # ---- 状态 / 开始时间 ----
+        # 状态展示名：优先 task_state.name（自定义状态），其次 type 映射常规名
+        status = _status_display_name(status_raw, is_completed)
+        # 开始时间：properties.start = {"value": {"date": ts, "with_time": 0}}
+        start_at = _start_to_epoch(task, props)
         return {
             "task_id": task_id,
             "identifier": identifier,
             "title": title,
             "desc": desc,
             "desc_images": desc_images,
+            "status": status,
+            "start_at": start_at,
+            "start_at_str": _ts_to_str(start_at, full=False),
             "project_id": project_id,
             "project_name": project_name,
             "assignee": assignee,

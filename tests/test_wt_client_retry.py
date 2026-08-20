@@ -165,6 +165,56 @@ def test_get_file_stream_retries_429():
     assert calls["n"] == 2, f"429 后重试成功应请求 2 次，实际 {calls['n']}"
 
 
+def test_normalize_task_status_and_start():
+    """normalize_task：状态名 + 开始时间提取。"""
+    c = make_client()
+    # 1) task_state = {name: "进行中", type: 2} → status="进行中"
+    t1 = c.normalize_task(
+        {"_id": "s1", "title": "T1",
+         "task_state": {"name": "进行中", "type": 2},
+         "properties": {"start": {"value": {"date": 1652786254, "with_time": 1}}}},
+        project_name="P")
+    assert t1["status"] == "进行中", f"应取 task_state.name，实际 {t1['status']!r}"
+    assert t1["is_completed"] is False
+    assert t1["start_at"] == 1652786254, f"start_at 应为 epoch 秒，实际 {t1['start_at']!r}"
+    assert t1["start_at_str"] and t1["start_at_str"] != "-", \
+        f"start_at_str 应有值，实际 {t1['start_at_str']!r}"
+    # 2) task_state.name 缺失但 type=3 → 已完成
+    t2 = c.normalize_task(
+        {"_id": "s2", "title": "T2",
+         "task_state": {"type": 3}},
+        project_name="P")
+    assert t2["status"] == "已完成", f"type=3 应映射「已完成」，实际 {t2['status']!r}"
+    assert t2["is_completed"] is True
+    # 3) 顶层 state_type int → 映射
+    t3 = c.normalize_task(
+        {"_id": "s3", "title": "T3", "state_type": 2},
+        project_name="P")
+    assert t3["status"] == "进行中", f"state_type=2 应映射「进行中」，实际 {t3['status']!r}"
+    # 4) 无状态字段 + is_completed=True → 「已完成」兜底
+    t4 = c.normalize_task(
+        {"_id": "s4", "title": "T4", "complete": True},
+        project_name="P")
+    assert t4["status"] == "已完成", f"完成态兜底，实际 {t4['status']!r}"
+    # 5) 无状态字段 + 未完成 → 空串
+    t5 = c.normalize_task({"_id": "s5", "title": "T5"}, project_name="P")
+    assert t5["status"] == "", f"无状态应为空串，实际 {t5['status']!r}"
+    assert t5["start_at"] is None and t5["start_at_str"] == "-", \
+        f"无开始时间应为 None/「-」，实际 {t5['start_at_str']!r}"
+    # 6) 顶层 start_at 直接形态（扁平时间戳）
+    t6 = c.normalize_task(
+        {"_id": "s6", "title": "T6", "start_at": 1700000000},
+        project_name="P")
+    assert t6["start_at"] == 1700000000, f"顶层 start_at，实际 {t6['start_at']!r}"
+    # 7) properties.start 字符串日期
+    t7 = c.normalize_task(
+        {"_id": "s7", "title": "T7",
+         "properties": {"start": {"value": {"date": "2026-08-20 10:00:00"}}}},
+        project_name="P")
+    assert t7["start_at"] is not None and t7["start_at_str"] != "-", \
+        f"字符串开始时间应可解析，实际 {t7['start_at_str']!r}"
+
+
 def test_normalize_task_extracts_desc():
     c = make_client()
     # 1) 顶层 desc 直接提取
@@ -446,4 +496,5 @@ if __name__ == "__main__":
     test_looks_like_metadata_value_zero()
     test_normalize_task_filters_zero_desc()
     test_extract_desc_images()
-    print("全部 14 个重试/字段测试通过 ✓")
+    test_normalize_task_status_and_start()
+    print("全部 15 个重试/字段测试通过 ✓")
