@@ -257,6 +257,20 @@
     background: var(--accent-soft); color: var(--accent);
     box-shadow: inset 0 0 0 1px var(--accent);
   }
+  /* 导出开关：仅任务 / 含评论 分段控件 */
+  .toolbar .export-switch {
+    display: inline-flex; border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden; margin-left: 6px;
+  }
+  .toolbar .export-switch .seg {
+    border: none; background: var(--panel); color: #64748b;
+    padding: 6px 11px; cursor: pointer; font-size: 13px; line-height: 1.2;
+  }
+  .toolbar .export-switch .seg:hover { background: var(--accent-soft); }
+  .toolbar .export-switch .seg.active {
+    background: var(--accent-soft); color: var(--accent); font-weight: 600;
+  }
+  .toolbar .pill-btn.primary:disabled { opacity: .6; cursor: default; }
   /* 「延期任务」按钮 badge 探测中态：文字色变弱 + 一个跳动的省略号点 */
   #overdueBtnLabel.scanning {
     color: var(--muted);
@@ -1162,6 +1176,15 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.2" fill="currentColor"/><circle cx="3.5" cy="12" r="1.2" fill="currentColor"/><circle cx="3.5" cy="18" r="1.2" fill="currentColor"/></svg>
           列设置
         </button>
+        <span class="divider"></span>
+        <div class="export-switch" id="exportSwitch">
+          <button type="button" class="seg" id="expTasks" onclick="setExportMode('tasks')">仅任务</button>
+          <button type="button" class="seg active" id="expComments" onclick="setExportMode('comments')">含评论</button>
+        </div>
+        <button id="exportBtn" class="pill-btn primary" onclick="exportExcel()" title="按当前视图与筛选条件导出 Excel">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          导出 Excel
+        </button>
       </div>
     </div>
 
@@ -1209,6 +1232,8 @@ const state = {
   // 负责人筛选：null=全部 / "__unassigned__"=未分配 / {uid, name}=具体成员
   // 负责人列表来自 /api/members，按 uid 匹配（name 中文相同也可能存在重复 uid）
   ownerFilter: null,
+  // 导出模式：comments=含评论（默认）/ tasks=仅任务（不含评论 sheet，更快）
+  exportMode: "comments",
   members: [],        // 负责人列表缓存（来自 /api/members），[{uid, name}]
   // 切换项目时清空 ownerFilter（避免跨项目残留不同成员造成"筛了等于没筛"的困惑）
   // ownerFilter 重置在 selectProject 内执行。
@@ -2344,6 +2369,69 @@ async function loadTasks(){
     }
   } catch(e){
     area.innerHTML = `<div class="alert">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// ====================== 一键导出 Excel ======================
+/** 切换导出模式：仅任务 / 含评论（默认含评论） */
+function setExportMode(mode){
+  state.exportMode = mode;
+  const t = document.getElementById("expTasks");
+  const c = document.getElementById("expComments");
+  if (t) t.classList.toggle("active", mode === "tasks");
+  if (c) c.classList.toggle("active", mode === "comments");
+}
+
+/** 按当前视图 + 筛选条件导出 Excel（服务端全量拉取，复用鉴权会话）。 */
+async function exportExcel(){
+  if (!state.projectId){ alert("请先选择项目"); return; }
+  const btn = document.getElementById("exportBtn");
+  const isOverdue = state.view === "overdue";
+
+  // 组装请求参数（与 loadTasks 保持一致：owner 用 uid 形态、board 视图带 keyword）
+  const params = new URLSearchParams();
+  params.set("view", isOverdue ? "overdue" : "board");
+  params.set("project_id", state.projectId);
+  if (isOverdue && state.ownerFilter){
+    const ownerParam = state.ownerFilter === "__unassigned__"
+      ? "__unassigned__" : (state.ownerFilter.uid || "");
+    if (ownerParam) params.set("owner", ownerParam);
+  } else if (!isOverdue){
+    const kw = buildSearchKeyword();
+    if (kw) params.set("keyword", kw);
+  }
+  params.set("with_comments", state.exportMode === "comments" ? "1" : "0");
+
+  const oldHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = "导出中…";
+  try {
+    const resp = await fetch(`/api/export?${params.toString()}`, {credentials: "same-origin"});
+    if (resp.status === 401){
+      hide("boardView"); show("loginView");
+      throw new Error("会话已失效，请重新登录");
+    }
+    if (!resp.ok){
+      let msg = `导出失败（${resp.status}）`;
+      try { const d = await resp.json(); if (d && d.error) msg = d.error; } catch(e){}
+      throw new Error(msg);
+    }
+    const blob = await resp.blob();
+    const cd = resp.headers.get("Content-Disposition") || "";
+    let fname = "worktile_export.xlsx";
+    const m = cd.match(/filename="([^"]+)"/);
+    if (m) fname = m[1];
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  } catch(e){
+    alert(e.message || "导出出错");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = oldHtml;
   }
 }
 

@@ -3,3 +3,4 @@ requests>=2.32.4
 emoji>=2.0.0
 cryptography>=44.0.1
 gunicorn>=22.0.0
+openpyxl>=3.1

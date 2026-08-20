@@ -22,6 +22,7 @@ from flask import (
 from werkzeug.middleware.proxy_fix import ProxyFix
 from cryptography.fernet import Fernet
 from wt_client import WorktileClient
+from exporter import build_workbook
 
 app = Flask(__name__)
 # 部署在反向代理 / 负载均衡后时，让 request.is_secure / remote_addr 识别真实情况，
@@ -636,6 +637,87 @@ def file_proxy(file_id):
     except RuntimeError as e:
         return jsonify({"ok": False, "error": str(e)}), 502
     return Response(data, mimetype=ctype)
+
+
+@app.route("/api/export", methods=["GET"])
+def export_excel():
+    """一键导出当前视图 + 筛选条件下的任务（与评论）为 Excel。
+
+    GET /api/export?view=board|overdue&project_id=...&owner=...&keyword=...&with_comments=1
+    - view=overdue：复用 _compute_overdue（已全量、已按 owner 过滤、已按逾期排序）
+    - view=board  ：复用 client._collect_tasks_for_export（全量 + owner + keyword 过滤）
+    - with_comments=0：只导出任务（不生成评论 sheet），更快
+    - 评论并发拉取（max_workers=_MAX_FILE_INFO_WORKERS）复用 429 退避重试
+    - project_id=__all__ 表示跨全部项目（耗时较长，已在 README 标注）
+    """
+    s = _require_session()
+    view = (request.args.get("view") or "board").strip()
+    if view not in ("board", "overdue"):
+        view = "board"
+    raw_pid = request.args.get("project_id", "__all__") or "__all__"
+    valid_ids = {p["id"] for p in s["projects"]}
+    project_id = raw_pid if (raw_pid == "__all__" or raw_pid in valid_ids) else "__all__"
+    owner_filter = (request.args.get("owner") or "").strip() or None
+    keyword = (request.args.get("keyword") or "").strip()
+    with_comments = request.args.get("with_comments", "1") != "0"
+
+    member_map = _ensure_member_map(s)
+    now = time.time()
+
+    try:
+        if view == "overdue":
+            tasks, _diag = _compute_overdue(
+                s, member_map, now, project_id, owner_filter=owner_filter)
+        else:
+            tasks = s["client"]._collect_tasks_for_export(
+                s["projects"], project_id, owner_filter, keyword, member_map)
+
+        comment_rows = []
+        if with_comments:
+            tids = [t["task_id"] for t in tasks if t.get("task_id")]
+            comment_map = s["client"].fetch_all_comments(tids, member_map=member_map)
+            for t in tasks:
+                tid = t.get("task_id")
+                comments = comment_map.get(tid, [])
+                t["_comment_count"] = len(comments)
+                for cm in comments:
+                    comment_rows.append({
+                        "task_id": tid,
+                        "title": t.get("title", ""),
+                        "project_name": t.get("project_name", ""),
+                        "author": cm.get("author", ""),
+                        "created_at_str": cm.get("created_at_str", ""),
+                        "content": cm.get("content", ""),
+                        "attachments": cm.get("attachments", []),
+                    })
+        else:
+            for t in tasks:
+                t["_comment_count"] = 0
+
+        task_rows = [{
+            "task_id": t.get("task_id", ""),
+            "identifier": t.get("identifier", ""),
+            "title": t.get("title", ""),
+            "project_name": t.get("project_name", ""),
+            "assignee": t.get("assignee", ""),
+            "is_completed": t.get("is_completed", False),
+            "updated_at_str": t.get("updated_at_str", ""),
+            "due_at_str": t.get("due_at_str", ""),
+            "overdue_days": t.get("overdue_days"),
+            "comment_count": t.get("_comment_count", 0),
+        } for t in tasks]
+
+        xlsx_bytes, _sheets = build_workbook(task_rows, comment_rows, with_comments)
+    except RuntimeError as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
+
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    filename = f"worktile_{view}_{ts}.xlsx"
+    resp = make_response(xlsx_bytes)
+    resp.headers["Content-Type"] = (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    resp.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return resp
 
 
 if __name__ == "__main__":

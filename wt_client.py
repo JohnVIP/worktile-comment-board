@@ -804,6 +804,63 @@ class WorktileClient:
         out.sort(key=lambda c: _to_sortable(c.get("created_at")), reverse=True)
         return out
 
+    # ------------------------------------------------------------------ 导出
+    def _collect_tasks_for_export(self, projects, project_id, owner_filter, keyword, member_map):
+        """全量收集任务（board 视图导出用），复用 _iter_all_tasks 并应用 owner + keyword 过滤。
+
+        过滤规则与页面 board 视图完全一致：
+        - owner_filter: None/"" → 不过滤；"__unassigned__" → 仅未分配；其他 → 按 _assignee_uid 精确匹配
+        - keyword: 多个用 | 分隔，按 title 大小写不敏感 OR 命中（与 search_tasks 一致）
+        返回 normalize_task 后的任务列表（不过滤已完成，方便导出全量看板）。
+        """
+        member_map = member_map or {}
+        if keyword:
+            kws_lc = [k.strip().lower() for k in keyword.split("|") if k.strip()]
+        else:
+            kws_lc = []
+        out = []
+        for t, _pname in self._iter_all_tasks(
+                projects, project_id, self._FETCH_PAGE, member_map):
+            # 负责人过滤（uid 形态，与 _compute_overdue 同源）
+            if owner_filter and owner_filter != "":
+                uid = t.get("_assignee_uid")
+                if owner_filter == "__unassigned__":
+                    if uid:                       # 有负责人 → 不算未分配
+                        continue
+                elif uid != owner_filter:
+                    continue
+            # 标题关键字 OR 过滤（keyword 为空表示不过滤）
+            if kws_lc:
+                title = (t.get("title") or "").lower()
+                if not any(kw in title for kw in kws_lc):
+                    continue
+            out.append(t)
+        return out
+
+    def fetch_all_comments(self, task_ids, member_map=None):
+        """并发拉取多个任务的评论，返回 {task_id: comments_list}。
+
+        复用 get_task_comments（已含 401 刷新 + 429/5xx 退避重试 + 文件信息补全）。
+        并发上限沿用 _MAX_FILE_INFO_WORKERS，避免「全量任务 + 评论」导出时触发限流。
+        单条任务失败不影响其他，降级为该 task_id 对应空列表。
+        """
+        member_map = member_map or {}
+        result = {}
+        if not task_ids:
+            return result
+        ids = list(task_ids)
+
+        def _fetch(tid):
+            try:
+                return tid, self.get_task_comments(tid, member_map=member_map)
+            except Exception:
+                return tid, []
+
+        with ThreadPoolExecutor(max_workers=min(_MAX_FILE_INFO_WORKERS, len(ids))) as pool:
+            for tid, comments in pool.map(_fetch, ids):
+                result[tid] = comments
+        return result
+
     @staticmethod
     def _extract_comment_author(raw, member_map=None):
         """
