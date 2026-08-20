@@ -237,9 +237,15 @@
     transition: background .15s, border-color .15s;
   }
   .toolbar select:hover, .toolbar .search-select input:hover { background: var(--panel-soft); }
-  /* 中段搜索卡片：独占一整段，吸纳所有剩余横向空间 */
-  .tb-search .chip-search {
-    flex: 1; min-width: 0;
+  /* 中段搜索卡片：独占一整段，吸纳所有剩余横向空间。
+     关键：必须覆盖 base `.chip-search { max-width:420px; display:inline-flex; min-width:240px }` 的尺寸锁，
+     否则搜索盒在 1280-1366 视口下会被卡死成 420，右侧残留 280+px 空白。 */
+  .tb-card.tb-search .chip-search {
+    display: flex;
+    flex: 1 1 0%;
+    min-width: 0;
+    max-width: none;
+    width: 100%;
     background: var(--panel-soft);
     border: 1px solid transparent;
     border-radius: var(--r-sm);
