@@ -493,9 +493,19 @@
     overflow: visible;
     text-overflow: clip;
   }
-  /* 任务编号/任务名称：通常是短字段，给个最小可见宽度 */
-  table.proj-table td.cell-id,
-  table.proj-table td.cell-title { min-width: 60px; }
+  /* 任务编号：通常是短字段，给个最小可见宽度 */
+  table.proj-table td.cell-id { min-width: 60px; }
+  /* 任务名称列：覆盖 auto 列的 nowrap+ellipsis 兜底，允许自然换行。
+     行高 1.45 控制多行密度；overflow-wrap:anywhere 让无空格长串（编号连写等）也能在任意位置断行；
+     hover 时 a 的 title 属性显示完整任务名（buildTaskTitle 已同步改为 t.title）。 */
+  table.proj-table td.cell-title {
+    min-width: 60px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.45;
+    vertical-align: middle;
+  }
   /* 任务负责人（窄列下不拆字符 + 截断省略号）。
      updated 列单独走两行渲染（日期 + 时间各一段），不在这里命中。
      命中规则必须用 .cell-* class，不能用 nth-last-child(-n+2)，否则列序变动时会误伤其他列。 */
@@ -2646,13 +2656,15 @@ function buildTaskUrl(t){
     + "/tasks/" + encodeURIComponent(t.task_id);
 }
 
-/** 任务名称渲染：可点击 → 新标签页打开 Worktile 任务详情；缺字段时降级为纯文本。 */
+/** 任务名称渲染：可点击 → 新标签页打开 Worktile 任务详情；缺字段时降级为纯文本。
+ *  a 的 title 显示完整任务名（不再是"在新标签页打开..."），便于多行换行/截断时 hover 看到全名。 */
 function buildTaskTitle(t){
   const url = buildTaskUrl(t);
-  const title = highlightTitle(t.title || "");
-  if (!url) return title;
+  const titleHtml = highlightTitle(t.title || "");
+  if (!url) return titleHtml;
+  const fullTitle = (t.title || "").trim();
   return `<a href="${url}" target="_blank" rel="noopener" `
-    + `title="在新标签页打开 Worktile 任务详情">${title}</a>`;
+    + `title="${escapeHtml(fullTitle)}">${titleHtml}</a>`;
 }
 
 /** 任务名称命中多个关键字（按 | 拆分）的部分加黄色高亮（先转义再包裹，避免 XSS/错位）。 */
