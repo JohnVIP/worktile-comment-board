@@ -1260,11 +1260,11 @@
 // 永远在两端、永远可见、不可被其他列拖到中间；端点列不加 resizer，
 // 只有"中间的列"才允许通过拖拽手柄调节列宽。
 // 模式：fixed=固定列宽（可拖拽调节），auto=按内容自适应列宽。
-// 列默认宽度（按截图实测：项目 230 / 编号 110 / 名称 270 / 负责人 130 / 评论 280 / 时间 90；
+// 列默认宽度（按截图实测：项目 200 / 编号 110 / 名称 270 / 负责人 130 / 评论 280 / 时间 90；
 // fixed 列（项目/评论）硬按此值；auto 列（编号/名称/负责人/时间）按内容自适应，
 // 实际渲染中 content 决定最终宽度，DEFAULT_COL_WIDTHS 仅在回退场景使用）
 const COLS_META = [
-  { key: "proj",     label: "项目名称",     width: 230, anchor: true,    mode: "fixed" },
+  { key: "proj",     label: "项目名称",     width: 200, anchor: true,    mode: "fixed" },
   { key: "code",     label: "任务编号",     width: 110,               mode: "auto"  },
   { key: "title",    label: "任务名称",     width: 270,               mode: "auto"  },
   { key: "owner",    label: "任务负责人",   width: 130,               mode: "auto"  },
@@ -2942,15 +2942,15 @@ function renderOverdueTable(items){
     state.colVisible.code = true;
   }
 
-  // colgroup：单表模式 —— proj 固定 180（避免长项目名撑宽整表），其余按 colModes
+  // colgroup：单表模式 —— proj 固定 150（避免长项目名撑宽整表；较主看板 200 略窄，左移 30px 一致），其余按 colModes
   let colgroupHtml = '<colgroup>';
   visibleCols.forEach((c) => {
     const isAuto = state.colModes[c.key] === "auto";
     if (isAuto){
       colgroupHtml += `<col data-col="${c.originalIdx}" data-mode="auto">`;
     } else {
-      // proj 在 overdue 视图用 180 默认；用户保存的自定义宽度会被 applyColumnWidths() 覆盖
-      const defW = c.key === "proj" ? 180 : DEFAULT_COL_WIDTHS[c.key];
+      // proj 在 overdue 视图用 150 默认（与主看板 200 同步左移 30px）；用户保存的自定义宽度会被 applyColumnWidths() 覆盖
+      const defW = c.key === "proj" ? 150 : DEFAULT_COL_WIDTHS[c.key];
       const customW = state.colWidths[c.originalIdx];
       const w = customW || defW;
       colgroupHtml += `<col data-col="${c.originalIdx}" data-mode="fixed" style="width:${w}px">`;
