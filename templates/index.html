@@ -208,12 +208,24 @@
     padding: 6px;
     box-shadow: var(--sh-1);
   }
-  .toolbar .filter-group { flex: 1; min-width: 0; }
-  .toolbar .action-group { flex-shrink: 0; }
+  .toolbar .filter-group { flex: 1 1 600px; min-width: 0; }
+  .toolbar .action-group { flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
+  /* 工具栏两行内：flex-wrap 让控件随窗口宽度自然换行；
+     row-gap > col-gap，保证换行后视觉不拥挤。 */
+  .toolbar .filter-group,
+  .toolbar .action-group {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
   .toolbar .group-label {
     font-size: var(--fs-xs); color: var(--muted); margin: 0 6px 0 4px;
     text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
+    white-space: nowrap;       /* 防止「项目 / 负责人 / 每页」被竖向拆字 */
+    flex-shrink: 0;
   }
+  .toolbar .search-select { flex-shrink: 1; min-width: 140px; }
+  .toolbar .chip-search { flex: 1 1 240px; min-width: 200px; max-width: 420px; }
+  .toolbar select { flex-shrink: 0; }
   .toolbar select, .toolbar .search-select input {
     width: auto; padding: 6px var(--s-3);
     border: 1px solid transparent; background: transparent;
