@@ -320,6 +320,40 @@ def test_normalize_task_filters_zero_desc():
     assert t3["desc"] == "", f"desc=0 应被过滤，实际 {t3['desc']!r}"
 
 
+def test_extract_desc_images():
+    """描述图片提取：markdown / PM image 节点 / 去重 / 无图。"""
+    edi = wt_client._extract_desc_images
+    # markdown 图片
+    md = "前文\n\n![08.gif](https://wt-box.worktile.com/a.gif)\n后文 ![x](https://x.com/b.png)"
+    assert edi(md) == ["https://wt-box.worktile.com/a.gif", "https://x.com/b.png"]
+    # 嵌套 dict {value: markdown}
+    assert edi({"value": "![a](https://x.com/c.jpg)"}) == ["https://x.com/c.jpg"]
+    # ProseMirror JSON 字符串（image 节点带 attrs.src）
+    pm = '[{"type":"paragraph","children":[{"text":"文字"}]},{"type":"image","attrs":{"src":"https://x.com/d.png"}}]'
+    assert edi(pm) == ["https://x.com/d.png"]
+    # dict 形态的 PM（非字符串）
+    pm_dict = {"type": "doc", "content": [
+        {"type": "image", "attrs": {"src": "https://x.com/e.png"}},
+    ]}
+    assert edi(pm_dict) == ["https://x.com/e.png"]
+    # 去重
+    dup = "![a](https://x.com/f.png) ![b](https://x.com/f.png)"
+    assert edi(dup) == ["https://x.com/f.png"]
+    # 无图片 → 空列表
+    assert edi("纯文本描述") == []
+    assert edi(None) == []
+    assert edi({"value": "没有图片的文本"}) == []
+    # normalize_task 全链路：desc 纯文本 + desc_images 分离
+    c = make_client()
+    t = c.normalize_task(
+        {"_id": "c1", "title": "T",
+         "properties": {"desc": {"value": "描述文字\n\n![img](https://x.com/g.gif)"}}},
+        project_name="P")
+    assert t["desc"] == "描述文字", f"desc 应为纯文本，实际 {t['desc']!r}"
+    assert t["desc_images"] == ["https://x.com/g.gif"], \
+        f"图片应单独抽出，实际 {t['desc_images']!r}"
+
+
 def test_enrich_tasks_with_desc():
     c = make_client()
     tasks = [
@@ -327,9 +361,12 @@ def test_enrich_tasks_with_desc():
         {"task_id": "t2", "desc": "已有值"},       # 已填值，跳过
         {"task_id": "t3"},                        # 无 desc key，需补全
     ]
-    # mock 详情接口：t1 → "详情描述"，t3 → "属性描述"，其它（含已填值的不应被调用）
+    # mock 详情接口：t1 → ("详情描述", [])，t3 → ("属性描述", [url])，其它（含已填值的不应被调用）
     def fake_get(task_id):
-        return {"t1": "详情描述", "t3": "属性描述"}.get(task_id, "")
+        return {
+            "t1": ("详情描述", []),
+            "t3": ("属性描述", ["https://x.com/a.png"]),
+        }.get(task_id, ("", []))
     with mock.patch.object(c, "_get_task_desc", side_effect=fake_get):
         enriched, failed = c.enrich_tasks_with_desc(tasks)
     assert enriched == 2, f"应补全 2 条（t1/t3），实际 {enriched}"
@@ -337,6 +374,9 @@ def test_enrich_tasks_with_desc():
     assert tasks[0]["desc"] == "详情描述", f"t1 应补全，实际 {tasks[0]['desc']!r}"
     assert tasks[1]["desc"] == "已有值", f"t2 已填值不应被覆盖，实际 {tasks[1]['desc']!r}"
     assert tasks[2]["desc"] == "属性描述", f"t3 应补全，实际 {tasks[2]['desc']!r}"
+    assert tasks[2].get("desc_images") == ["https://x.com/a.png"], \
+        f"t3 图片应补全，实际 {tasks[2].get('desc_images')!r}"
+    assert "desc_images" not in tasks[0], "t1 无图片不应写 desc_images"
     # 空列表 / 全部已填 → 不发起请求
     with mock.patch.object(c, "_get_task_desc", side_effect=AssertionError("不应被调用")):
         assert c.enrich_tasks_with_desc([{"task_id": "x", "desc": "y"}]) == (0, 0)
@@ -369,12 +409,14 @@ def test_get_task_desc_passes_columns_param():
         }
 
     with mock.patch.object(c, "_req", side_effect=fake_req):
-        desc = c._get_task_desc("t1")
+        desc, imgs = c._get_task_desc("t1")
     assert captured["path"] == "/mission/tasks/t1", f"请求路径，实际 {captured.get('path')!r}"
     assert (captured.get("params") or {}).get("columns") == "properties", \
         f"必须传 columns=properties，实际 {captured.get('params')!r}"
     assert desc.startswith("【Tips】：通过屏幕左侧"), f"应抽到描述文本，实际 {desc!r}"
     assert "![" not in desc and "wt-box.worktile.com" not in desc, f"markdown 图片应被清理，实际 {desc!r}"
+    # 图片 URL 应单独抽到 desc_images
+    assert imgs == ["https://wt-box.worktile.com/x.gif"], f"图片 URL 应抽出，实际 {imgs!r}"
 
 
 def test_clean_desc_text():
@@ -403,4 +445,5 @@ if __name__ == "__main__":
     test_clean_desc_text()
     test_looks_like_metadata_value_zero()
     test_normalize_task_filters_zero_desc()
-    print("全部 13 个重试/字段测试通过 ✓")
+    test_extract_desc_images()
+    print("全部 14 个重试/字段测试通过 ✓")

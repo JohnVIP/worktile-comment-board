@@ -348,6 +348,8 @@ def _heuristic_desc_from_props(props):
 # markdown 图片/链接清理（描述值常带 ![alt](url) 原文，看板列显示纯文本更友好）
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+# markdown 图片 URL 捕获（![alt](url) → 抓 url 分组）
+_MD_IMAGE_URL_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
 
 
 def _clean_desc_text(s):
@@ -358,6 +360,71 @@ def _clean_desc_text(s):
     s = _MD_LINK_RE.sub(r"\1", s)        # [text](url) → text
     s = re.sub(r"\n{3,}", "\n\n", s)     # 3+ 连续空行压成 1 个空行
     return s.strip()
+
+
+def _collect_pm_images(node, out, _depth=0):
+    """递归收集 ProseMirror 文档里的图片节点 URL（attrs.src / src）。"""
+    if _depth > 10 or len(out) > 30:
+        return
+    if isinstance(node, dict):
+        # image 节点：{"type":"image","attrs":{"src":...}} 或 {"type":"image","src":...}
+        if node.get("type") in ("image", "imageView", "imageBlock"):
+            attrs = node.get("attrs") or {}
+            src = attrs.get("src") or node.get("src")
+            if isinstance(src, str) and src.startswith(("http://", "https://", "/")):
+                out.append(src)
+            return
+        for v in node.values():
+            _collect_pm_images(v, out, _depth + 1)
+    elif isinstance(node, list):
+        for item in node:
+            _collect_pm_images(item, out, _depth + 1)
+
+
+def _extract_desc_images(raw):
+    """从描述值里抽图片 URL 列表（markdown 语法 + ProseMirror image 节点）。
+
+    返回去重后的 URL 列表（保序）；无图片返回空列表。
+    """
+    if raw is None:
+        return []
+    out = []
+
+    def _push(u):
+        if isinstance(u, str) and u.startswith(("http://", "https://", "/")) and u not in out:
+            out.append(u)
+
+    if isinstance(raw, str):
+        # markdown 图片
+        for m in _MD_IMAGE_URL_RE.finditer(raw):
+            _push(m.group(1))
+        # ProseMirror JSON 字符串
+        stripped = raw.strip()
+        if stripped.startswith(("[", "{")):
+            try:
+                parsed = _json.loads(stripped)
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, (dict, list)):
+                imgs = []
+                _collect_pm_images(parsed, imgs)
+                for u in imgs:
+                    _push(u)
+    elif isinstance(raw, dict):
+        # 嵌套 dict：先走候选键再递归
+        for k in ("value", "content", "text", "data", "body"):
+            if k in raw and raw[k] is not None:
+                for u in _extract_desc_images(raw[k]):
+                    _push(u)
+        imgs = []
+        _collect_pm_images(raw, imgs)
+        for u in imgs:
+            _push(u)
+    elif isinstance(raw, list):
+        for item in raw:
+            for u in _extract_desc_images(item):
+                _push(u)
+    return out
 
 
 def _pick_desc_with_path(obj, props=None):
@@ -1029,12 +1096,16 @@ class WorktileClient:
         # 用 _pick_desc_from_obj 统一处理：先按 _DESC_KEYS 顺序尝试（每一步都
         # 用 _extract_desc_value 兼容嵌套），命中即返回；都未命中再在 properties
         # 里做兜底扫描（排除元数据键，挑最长最像描述的字符串）。
-        desc = _clean_desc_text(_pick_desc_from_obj(task, props))
+        desc_raw = _pick_desc_from_obj(task, props)
+        desc = _clean_desc_text(desc_raw)
+        # 描述里的图片 URL（markdown + ProseMirror image 节点），前端渲染缩略图 + lightbox
+        desc_images = _extract_desc_images(desc_raw)
         return {
             "task_id": task_id,
             "identifier": identifier,
             "title": title,
             "desc": desc,
+            "desc_images": desc_images,
             "project_id": project_id,
             "project_name": project_name,
             "assignee": assignee,
@@ -1052,7 +1123,9 @@ class WorktileClient:
     def _get_task_desc(self, task_id):
         """从任务详情接口 /mission/tasks/{task_id} 取 desc（列表接口不含描述字段）。
 
-        返回去空白后的描述字符串；任何异常/未命中都返回空串（不影响主流程）。
+        返回 (desc, desc_images)：
+        - desc：去空白 + 清理 markdown 后的描述纯文本；异常/未命中返回空串
+        - desc_images：描述里图片 URL 列表（markdown + ProseMirror image 节点）
         详情响应可能有 data / data.value 包裹，统一解开后用 _pick_desc_from_obj
         统一从顶层 + properties 抽取；自动兼容 properties.desc.value 嵌套结构。
 
@@ -1080,7 +1153,7 @@ class WorktileClient:
         except Exception as e:
             audit["error"] = f"{type(e).__name__}: {e}"
             _record_desc_audit(audit)
-            return ""
+            return ("", [])
         detail = data
         if isinstance(data, dict):
             if "data" in data and isinstance(data["data"], dict):
@@ -1089,7 +1162,7 @@ class WorktileClient:
         if not isinstance(detail, dict):
             audit["error"] = "detail not dict"
             _record_desc_audit(audit)
-            return ""
+            return ("", [])
         props = detail.get("properties") or detail.get("props") or {}
         # 诊断：在调用抽取之前先抓详情结构摘要
         try:
@@ -1110,6 +1183,12 @@ class WorktileClient:
             pass
         # 真正抽取（带命中路径，便于诊断）
         hit_path, desc = _pick_desc_with_path(detail, props)
+        # 抽图片 URL（markdown + ProseMirror image 节点），在清理文本前抽
+        desc_images = _extract_desc_images(
+            props.get("desc") if isinstance(props, dict) else None
+        ) or _extract_desc_images(
+            props.get("description") if isinstance(props, dict) else None
+        )
         desc = _clean_desc_text(desc)  # 清掉 ![alt](url) 等 markdown 语法，看板显示纯文本
         if desc:
             audit["ok"] = True
@@ -1121,10 +1200,10 @@ class WorktileClient:
         # 兼容旧版 stderr 钩子
         if not desc and os.environ.get("WT_DESC_DEBUG") == "1":
             print(f"[wt-desc] {task_id}: empty. top-level keys={audit['top_keys'][:30]}", flush=True)
-        return desc
+        return (desc, desc_images)
 
     def enrich_tasks_with_desc(self, tasks, concurrency=None):
-        """批量补全任务的 desc（列表接口不带描述，需逐任务查详情）。
+        """批量补全任务的 desc / desc_images（列表接口不带描述，需逐任务查详情）。
 
         原地更新 tasks 中的 dict；返回 (enriched, failed)。
         - 只对「当前 desc 为空」的任务发起请求，已填值的跳过（幂等）。
@@ -1145,12 +1224,14 @@ class WorktileClient:
             for fut in as_completed(fut_map):
                 t = fut_map[fut]
                 try:
-                    d = fut.result()
+                    d, imgs = fut.result()
                 except Exception:
                     failed += 1
                     continue
                 if d:
                     t["desc"] = d
+                    if imgs:
+                        t["desc_images"] = imgs
                     enriched += 1
         return (enriched, failed)
 

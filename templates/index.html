@@ -518,6 +518,27 @@
     color: var(--text-2, #64748b);
   }
   table.proj-table td.cell-desc .desc-text { display: inline; }
+  /* 描述里的图片：小缩略图行（点击放大走 lightbox） */
+  table.proj-table td.cell-desc .desc-imgs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  table.proj-table td.cell-desc .desc-img {
+    width: 56px;
+    height: 56px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid var(--line-2, #e2e8f0);
+    cursor: zoom-in;
+    transition: transform .12s ease, box-shadow .12s ease;
+    background: var(--bg-1, #f8fafc);
+  }
+  table.proj-table td.cell-desc .desc-img:hover {
+    transform: scale(1.06);
+    box-shadow: 0 2px 8px rgba(15, 23, 42, .18);
+  }
   /* 任务负责人（窄列下不拆字符 + 截断省略号）。
      updated 列单独走两行渲染（日期 + 时间各一段），不在这里命中。
      命中规则必须用 .cell-* class，不能用 nth-last-child(-n+2)，否则列序变动时会误伤其他列。 */
@@ -2863,9 +2884,18 @@ function renderTable(items){
             // 描述：直接取任务详情页「描述」属性值（normalize_task 已提取到 t.desc）；
             // 缺则空。white-space:normal + 任意位置断行（CSS td.cell-desc），
             // 长描述自然换行；hover 显示完整文本。
+            // 描述里的图片（desc_images）：渲染小缩略图行，点击 openLightbox 放大预览。
             const raw = (t.desc || "").trim();
+            const imgs = Array.isArray(t.desc_images) ? t.desc_images : [];
+            let descInner = raw ? `<span class="desc-text">${escapeHtml(raw)}</span>` : '';
+            if (imgs.length) {
+              descInner += '<span class="desc-imgs">'
+                + imgs.map(u => `<img class="desc-img" src="${escapeHtml(u)}" loading="lazy" `
+                  + `alt="描述图片" title="点击放大查看" onclick="openLightbox(this.src)">`).join("")
+                + '</span>';
+            }
             html += `<td class="cell-desc"${dataMode}${fixStyle} title="${escapeHtml(raw)}">`
-              + (raw ? `<span class="desc-text">${escapeHtml(raw)}</span>` : '') + '</td>';
+              + descInner + '</td>';
             break;
           }
           case "comments":
@@ -3051,9 +3081,18 @@ function renderOverdueTable(items){
           html += `<td class="cell-title"${dataMode}${fixStyle}>${buildTaskTitle(t)}</td>`;
           break;
         case "desc": {
+          // 同主看板：文本 + 图片缩略图（点击 openLightbox 放大）
           const raw = (t.desc || "").trim();
+          const imgs = Array.isArray(t.desc_images) ? t.desc_images : [];
+          let descInner = raw ? `<span class="desc-text">${escapeHtml(raw)}</span>` : '';
+          if (imgs.length) {
+            descInner += '<span class="desc-imgs">'
+              + imgs.map(u => `<img class="desc-img" src="${escapeHtml(u)}" loading="lazy" `
+                + `alt="描述图片" title="点击放大查看" onclick="openLightbox(this.src)">`).join("")
+              + '</span>';
+          }
           html += `<td class="cell-desc"${dataMode}${fixStyle} title="${escapeHtml(raw)}">`
-            + (raw ? `<span class="desc-text">${escapeHtml(raw)}</span>` : '') + '</td>';
+            + descInner + '</td>';
           break;
         }
         case "comments":
