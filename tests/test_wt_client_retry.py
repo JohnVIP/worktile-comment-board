@@ -268,6 +268,20 @@ def test_extract_desc_value_robust():
     assert wt_client._extract_desc_value(1.5) == "1.5"
     # 嵌套 dict 里包含数字 0 也应被识别为空
     assert wt_client._extract_desc_value({"value": 0}) == ""
+    # ProseMirror JSON 字符串（用户截图：描述列显示 JSON 源码）
+    pm_str = '[{"type":"paragraph","key":"HzEpG","children":[{"text":"学习项目中的各种功能细节"}]},{"type":"paragraph","key":"krDFN","children":[{"text":"下午学习目标模块"}]}]'
+    assert wt_client._extract_desc_value(pm_str) == \
+        "学习项目中的各种功能细节\n下午学习目标模块", \
+        f"PM JSON 字符串应抽文本，实际 {wt_client._extract_desc_value(pm_str)!r}"
+    # 嵌套更深的 PM 结构（children → children → text）
+    nested_pm = '[{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"嵌套文本"}]}]}]'
+    assert wt_client._extract_desc_value(nested_pm) == "嵌套文本"
+    # 单段 paragraph 字符串
+    single_pm = '[{"type":"paragraph","children":[{"text":"单段文本"}]}]'
+    assert wt_client._extract_desc_value(single_pm) == "单段文本"
+    # 解析失败 / 不是 JSON 形态 → 原样返回
+    assert wt_client._extract_desc_value("[abc not json") == "[abc not json"
+    assert wt_client._extract_desc_value("普通文本描述") == "普通文本描述"
 
 
 def test_looks_like_metadata_value_zero():

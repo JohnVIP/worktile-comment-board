@@ -119,6 +119,59 @@ _DESC_KEYS = (
     "summary", "detail", "intro", "text", "post",
 )
 
+
+def _extract_desc_from_pm(node, _depth=0):
+    """从 ProseMirror 文档（dict/list 嵌套结构）里递归抽取所有文本。
+
+    形态：
+    - doc 是 list of block nodes，每个 block 含 children/content（list of leaf nodes）
+    - leaf node 形如 {"text": "..."} 或 {"type":"text","text":"..."}
+    - 容器节点的 list 字段名通常叫 children 或 content（兼容 nodes / blocks）
+    - 节点之间用 \\n 分隔（paragraph 自然换行）
+
+    限制：_depth 上限 10 防止异常结构死循环。
+    """
+    if _depth > 10:
+        return ""
+    if isinstance(node, str):
+        return node
+    if isinstance(node, dict):
+        # leaf node 直接返回 text
+        if "text" in node and isinstance(node.get("text"), str):
+            return node["text"]
+        # 容器节点：按已知 children/content 键递归，并记下已处理过的 key，
+        # 避免下方兜底分支再把它们重复遍历一次
+        handled_keys = set()
+        parts = []
+        for k in ("children", "content", "nodes", "blocks"):
+            if k in node and isinstance(node[k], list):
+                handled_keys.add(k)
+                for child in node[k]:
+                    sub = _extract_desc_from_pm(child, _depth + 1)
+                    if sub:
+                        parts.append(sub)
+        # 兜底：递归 dict 里所有 list 值（兼容非典型容器结构）
+        for k, v in node.items():
+            if k in handled_keys:
+                continue
+            if isinstance(v, list) and v and isinstance(v[0], (dict, str)):
+                sub_parts = []
+                for child in v:
+                    sub = _extract_desc_from_pm(child, _depth + 1)
+                    if sub:
+                        sub_parts.append(sub)
+                if sub_parts:
+                    parts.append("\n".join(sub_parts))
+        return "\n".join(p for p in parts if p)
+    if isinstance(node, list):
+        parts = []
+        for item in node:
+            sub = _extract_desc_from_pm(item, _depth + 1)
+            if sub:
+                parts.append(sub)
+        return "\n".join(parts)
+    return ""
+
 # 诊断环形缓冲：每次 _get_task_desc 都把「详情顶层 keys + properties 摘要 + 是否命中」
 # 记录到这里，便于未命中时一眼看到真实结构。环形 deque 上限 30 条，线程安全。
 _DESC_AUDIT_LOCK = threading.Lock()
@@ -180,7 +233,23 @@ def _extract_desc_value(raw):
     if raw is None:
         return ""
     if isinstance(raw, str):
-        return raw.strip()
+        # 部分 Worktile 版本把描述存为 ProseMirror JSON 字符串（富文本编辑器格式）
+        # 形如 [{"type":"paragraph","children":[{"text":"..."}]}]
+        # 这种情况下原样 return 会把整段 JSON 源码当描述返回，用户截图反馈过。
+        # 策略：先试 json.loads；解析成功且是 dict/list 形态 → 递归抽 text
+        # 解析失败 / 结果为空 → fallback 回原字符串（普通文本描述）
+        stripped = raw.strip()
+        if stripped.startswith(("[", "{")):
+            try:
+                parsed = _json.loads(stripped)
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, (dict, list)):
+                inner = _extract_desc_from_pm(parsed)
+                if inner:
+                    return inner
+                # 解析成功但抽不到 text（可能不是 PM 格式）→ fallback 原字符串
+        return stripped
     # bool 是 int 的子类，先处理避免被误当数字
     if isinstance(raw, bool):
         return ""
