@@ -12,6 +12,7 @@ Worktile OpenAPI 客户端（团队鉴权 Tenant 模式）
 
 import json as _json
 import mimetypes
+import os
 import re
 import requests
 import time
@@ -102,6 +103,146 @@ def _extract_assignee_uid(props):
     if isinstance(val, str):
         return val
     return None
+
+
+# === 描述字段提取 ===
+# Worktile 真实结构（已在 worktile-v2 技能的 get_task_detail.py 中验证）：
+#   properties.desc = {"value": "【Tips】：..."}   ← 嵌套对象，value 里是文本/富文本
+# 兼容：直接字符串 / {value: ...} / {content: ...} / 嵌套多层 dict / 字符串列表
+# 候选键名涵盖各版本命名分歧：desc / description / content / body / note /
+#   remark / summary / detail / intro / text / posts（部分版本描述放在 posts[0].content）
+
+_DESC_KEYS = (
+    "desc", "description", "content", "body", "note", "remark",
+    "summary", "detail", "intro", "text", "post",
+)
+
+
+def _extract_desc_value(raw):
+    """从 desc 字段的任意嵌套结构里提取出最终文本。命中返回字符串；未命中返回空串。
+
+    兼容：
+    - str / int / float / bool  → str(...).strip()
+    - dict  → 按候选键 value → content → text → data 递归取值；首层都不命中再递归所有 v
+    - list  → 取第一个非空元素（部分版本描述放在 posts[0].content）
+    - None / 其他类型 → 返回空串
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw.strip()
+    # bool 是 int 的子类，先处理避免被误当数字
+    if isinstance(raw, bool):
+        return ""
+    if isinstance(raw, (int, float)):
+        return str(raw).strip()
+    if isinstance(raw, dict):
+        # 优先按已知嵌套键递归（覆盖 {"value": "..."} 等真实结构）
+        for k in ("value", "content", "text", "data", "body"):
+            if k in raw and raw[k] is not None:
+                inner = _extract_desc_value(raw[k])
+                if inner:
+                    return inner
+        # 没命中嵌套键 → 在 dict 自己的值里递归（兜底非典型结构）
+        for v in raw.values():
+            inner = _extract_desc_value(v)
+            if inner:
+                return inner
+        return ""
+    if isinstance(raw, list):
+        for item in raw:
+            inner = _extract_desc_value(item)
+            if inner:
+                return inner
+        return ""
+    return ""
+
+
+def _looks_like_metadata_value(s):
+    """判断字符串是否像元数据（ID/UUID/ISO 时间/HTML 标签），扫描时不视作描述。"""
+    if not isinstance(s, str):
+        return False
+    t = s.strip()
+    if not t:
+        return True
+    # ISO 时间
+    try:
+        from datetime import datetime
+        head = t[:19]
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
+                    "%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                datetime.strptime(head, fmt)
+                return True
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    # 24 位 hex ObjectId / 纯字母数字 ID
+    if re.fullmatch(r"[a-fA-F0-9]{12,}", t):
+        return True
+    # 纯链接
+    if re.fullmatch(r"https?://\S+", t):
+        return True
+    return False
+
+
+def _heuristic_desc_from_props(props):
+    """properties 兜底：排除已知元数据键后，挑最长的「像描述」的字符串值。
+
+    排除：assignee / start / due / priority / tag / state / task_state / created_by /
+          create_by / created_at / updated_at / completed_at / identifier /
+          estimated_workload / progress / follower 等「结构化字段」
+    """
+    if not isinstance(props, dict):
+        return ""
+    skip = {
+        # 元数据/结构化字段（不是描述）
+        "assignee", "start", "due", "priority", "tag", "state", "task_state",
+        "created_by", "create_by", "created_at", "create_at", "updated_at",
+        "update_at", "completed_at", "identifier", "estimated_workload",
+        "progress", "follower", "participants", "sub_task", "sub_tasks",
+        "related", "depends", "customfields", "attachments",
+        # 已被显式候选处理过的字段，兜底扫描跳过避免重复
+        *_DESC_KEYS,
+    }
+    best = ""
+    best_len = 0
+    for k, v in props.items():
+        if k in skip:
+            continue
+        s = _extract_desc_value(v)
+        if not s or _looks_like_metadata_value(s):
+            continue
+        if len(s) > best_len:
+            best = s
+            best_len = len(s)
+    return best
+
+
+def _pick_desc_from_obj(obj, props=None):
+    """从任务对象 + properties 中按候选顺序匹配 desc，命中即返回字符串。
+
+    顺序：先已知 desc 候选键（顶层 → properties）→ properties 兜底扫描。
+    每一步都用 _extract_desc_value 兼容嵌套。
+    """
+    if isinstance(obj, dict):
+        for k in _DESC_KEYS:
+            if k in obj and obj[k] is not None:
+                s = _extract_desc_value(obj.get(k))
+                if s:
+                    return s
+    if isinstance(props, dict):
+        for k in _DESC_KEYS:
+            if k in props and props[k] is not None:
+                s = _extract_desc_value(props.get(k))
+                if s:
+                    return s
+    if isinstance(props, dict):
+        heuristic = _heuristic_desc_from_props(props)
+        if heuristic:
+            return heuristic
+    return ""
 
 
 def _to_epoch_sec(raw):
@@ -718,15 +859,15 @@ class WorktileClient:
                       or task.get("state_type")
                       or _first(props, ["task_state", "state_type"]))
         is_completed = _is_completed(task, props)
-        # 描述：任务详情页的「描述」属性，API 字段标识为 desc。
-        # 列表接口（V1 get-project-tasks-by-page）通常在顶层带 desc；
-        # V2 的 properties 也可能含 desc/description。逐一兜底，缺则空串。
-        desc = (task.get("desc")
-                or task.get("description")
-                or props.get("desc")
-                or props.get("description")
-                or "")
-        desc = str(desc).strip() if desc else ""
+        # ---- 描述 ----
+        # Worktile 任务详情页「描述」属性的真实结构：
+        #   properties.desc = {"value": "【Tips】：..."}  ← 嵌套对象
+        # （已在 worktile-v2 技能 get_task_detail.py 验证）。列表接口（V1 /mission/
+        # get-project-tasks-by-page）通常不带 desc，V2 接口可能带（但也是嵌套）。
+        # 用 _pick_desc_from_obj 统一处理：先按 _DESC_KEYS 顺序尝试（每一步都
+        # 用 _extract_desc_value 兼容嵌套），命中即返回；都未命中再在 properties
+        # 里做兜底扫描（排除元数据键，挑最长最像描述的字符串）。
+        desc = _pick_desc_from_obj(task, props)
         return {
             "task_id": task_id,
             "identifier": identifier,
@@ -750,7 +891,8 @@ class WorktileClient:
         """从任务详情接口 /mission/tasks/{task_id} 取 desc（列表接口不含描述字段）。
 
         返回去空白后的描述字符串；任何异常/未命中都返回空串（不影响主流程）。
-        详情响应可能有 data / data.value 包裹，统一解开后从顶层与 properties 多处兜底。
+        详情响应可能有 data / data.value 包裹，统一解开后用 _pick_desc_from_obj
+        统一从顶层 + properties 抽取；自动兼容 properties.desc.value 嵌套结构。
         """
         try:
             data = self._req("GET", f"/mission/tasks/{task_id}")
@@ -764,18 +906,12 @@ class WorktileClient:
         if not isinstance(detail, dict):
             return ""
         props = detail.get("properties") or detail.get("props") or {}
-        desc = (detail.get("desc")
-                or detail.get("description")
-                or detail.get("content")
-                or detail.get("remark")
-                or detail.get("summary")
-                or props.get("desc")
-                or props.get("description")
-                or props.get("content")
-                or props.get("remark")
-                or props.get("summary")
-                or "")
-        return str(desc).strip() if desc else ""
+        desc = _pick_desc_from_obj(detail, props)
+        # 留个单行调试钩子：若启用了 WT_DESC_DEBUG，能看到每条任务命中的具体字段
+        if not desc and os.environ.get("WT_DESC_DEBUG") == "1":
+            keys_top = sorted([k for k in (detail or {}).keys() if isinstance(detail.get(k), (str, dict, list))])
+            print(f"[wt-desc] {task_id}: empty. top-level keys={keys_top[:30]}", flush=True)
+        return desc
 
     def enrich_tasks_with_desc(self, tasks, concurrency=None):
         """批量补全任务的 desc（列表接口不带描述，需逐任务查详情）。

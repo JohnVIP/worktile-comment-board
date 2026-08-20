@@ -182,6 +182,66 @@ def test_normalize_task_extracts_desc():
     # 5) desc 为 None → 空串
     t5 = c.normalize_task({"_id": "a5", "title": "T5", "desc": None}, project_name="P")
     assert t5["desc"] == "", f"desc=None 应为空串，实际 {t5['desc']!r}"
+    # 6) Worktile 真实结构：properties.desc = {"value": "..."} 嵌套对象
+    t6 = c.normalize_task(
+        {"_id": "a6", "title": "T6",
+         "properties": {"desc": {"value": "【Tips】：通过屏幕左侧功能导航"}}},
+        project_name="P")
+    assert t6["desc"] == "【Tips】：通过屏幕左侧功能导航", \
+        f"properties.desc.value 嵌套应能解析，实际 {t6['desc']!r}"
+    # 7) 多层嵌套：{data: {value: "..."}}
+    t7 = c.normalize_task(
+        {"_id": "a7", "title": "T7",
+         "properties": {"desc": {"data": {"value": "多层嵌套描述"}}}},
+        project_name="P")
+    assert t7["desc"] == "多层嵌套描述", \
+        f"properties.desc.data.value 嵌套，实际 {t7['desc']!r}"
+    # 8) description 键 + 嵌套
+    t8 = c.normalize_task(
+        {"_id": "a8", "title": "T8",
+         "properties": {"description": {"value": "描述英文键"}}},
+        project_name="P")
+    assert t8["desc"] == "描述英文键", \
+        f"properties.description.value 嵌套，实际 {t8['desc']!r}"
+    # 9) 兜底：properties 里没 desc/description/content 等已知键，但有「用户备忘」这类
+    #    长字符串时，仍然能扫到（排除元数据后取最长）
+    t9 = c.normalize_task(
+        {"_id": "a9", "title": "T9",
+         "properties": {"assignee": "u1",
+                        "user_memo": "这是个长一点的非字段描述内容，用于覆盖兜底扫描逻辑"}},
+        project_name="P")
+    assert "非字段描述" in t9["desc"], f"properties 兜底扫描应命中，实际 {t9['desc']!r}"
+    # 10) 兜底不会把短元数据当描述
+    t10 = c.normalize_task(
+        {"_id": "a10", "title": "T10",
+         "properties": {"assignee": "u1", "tag": "x"}},
+        project_name="P")
+    assert t10["desc"] == "", f"无可信描述应返回空串，实际 {t10['desc']!r}"
+
+
+def test_extract_desc_value_robust():
+    """_extract_desc_value 处理各种嵌套层级"""
+    # 直接字符串
+    assert wt_client._extract_desc_value("hello") == "hello"
+    assert wt_client._extract_desc_value("  trim me  ") == "trim me"
+    # None / 空
+    assert wt_client._extract_desc_value(None) == ""
+    assert wt_client._extract_desc_value({}) == ""
+    assert wt_client._extract_desc_value([]) == ""
+    # 嵌套 dict：{value: ...}
+    assert wt_client._extract_desc_value({"value": "v1"}) == "v1"
+    # 嵌套 dict：{content: ...}
+    assert wt_client._extract_desc_value({"content": "c1"}) == "c1"
+    # 多层嵌套
+    assert wt_client._extract_desc_value({"data": {"value": "d1"}}) == "d1"
+    assert wt_client._extract_desc_value({"value": {"text": "nested"}}) == "nested"
+    # dict 候选键都不命中 → 兜底在 values 里递归
+    assert wt_client._extract_desc_value({"foo": "bar1", "baz": {"value": "bar2"}}) in ("bar1", "bar2")
+    # 列表：取第一个非空元素
+    assert wt_client._extract_desc_value(["skip", "first valid", "another"]) == "skip"
+    assert wt_client._extract_desc_value(["", "   ", "real"]) == "real"
+    # bool 不当作数字
+    assert wt_client._extract_desc_value(True) == ""
 
 
 def test_enrich_tasks_with_desc():
@@ -215,5 +275,6 @@ if __name__ == "__main__":
     test_exhaust_retries_then_raise()
     test_get_file_stream_retries_429()
     test_normalize_task_extracts_desc()
+    test_extract_desc_value_robust()
     test_enrich_tasks_with_desc()
-    print("全部 7 个重试/字段测试通过 ✓")
+    print("全部 9 个重试/字段测试通过 ✓")

@@ -635,6 +635,58 @@ def debug_comments_raw(task_id):
     return jsonify({"ok": True, "data": data})
 
 
+@app.route("/api/debug/task-detail/<task_id>", methods=["GET"])
+def debug_task_detail(task_id):
+    """调试：拉任务详情返回关键结构摘要（仅看 desc 在哪里）。
+
+    用法：浏览器或 curl 访问 /api/debug/task-detail/<task_id>，
+    返回内含 top_level_keys（顶层所有键）、properties_keys（properties 字典里的键）、
+    desc_candidates（描述字段在各候选键下的解析结果）、properties_desc_value
+    （更展开的 properties.desc 形态）。便于一眼看出 Worktile 究竟把描述放在
+    哪个键里、嵌套了几层。
+    """
+    s = _require_session()
+    try:
+        data = s["client"]._req("GET", f"/mission/tasks/{task_id}")
+    except RuntimeError as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
+
+    detail = data
+    if isinstance(data, dict) and "data" in data and isinstance(data["data"], dict):
+        inner = data["data"]
+        detail = inner.get("value", inner)
+    if not isinstance(detail, dict):
+        return jsonify({"ok": False, "error": "detail 不是字典", "raw_type": str(type(detail))})
+
+    props = detail.get("properties") or detail.get("props") or {}
+
+    # 摘出每个候选键的「解析前 / 解析后」形态，便于排查嵌套层级
+    candidate_preview = {}
+    for k in ("desc", "description", "content", "body", "note",
+              "remark", "summary", "detail", "intro", "text", "post"):
+        for src_label, src in (("top", detail), ("props", props)):
+            if isinstance(src, dict) and k in src and src[k] is not None:
+                v = src[k]
+                vp = WorktileClient._pick_desc_from_obj({k: v})  # 复用解析
+                candidate_preview[f"{src_label}.{k}"] = {
+                    "raw_type": type(v).__name__,
+                    "raw_preview": (str(v)[:200] + "…") if isinstance(v, str) and len(str(v)) > 200 else v
+                    if not isinstance(v, str) else v[:200],
+                    "parsed_type": type(vp).__name__ if vp is not None else "None",
+                    "parsed_len": len(vp) if vp else 0,
+                }
+
+    return jsonify({
+        "ok": True,
+        "top_level_keys": sorted(list(detail.keys())),
+        "properties_keys": sorted(list(props.keys())) if isinstance(props, dict) else [],
+        "properties_desc_value_full": props.get("desc") if isinstance(props, dict) else None,
+        "desc_candidates": candidate_preview,
+        "title": detail.get("title"),
+        "task_id": detail.get("_id"),
+    })
+
+
 @app.route("/api/file/<file_id>")
 def file_proxy(file_id):
     """代理 Worktile 文件字节流，供前端 <img> 预览 / <a> 下载。
