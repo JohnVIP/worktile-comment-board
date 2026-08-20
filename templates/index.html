@@ -194,37 +194,40 @@
   .topbar .icon-btn:hover { background: var(--accent-soft); color: var(--accent); }
   .topbar .icon-btn svg { width: 18px; height: 18px; }
 
-  /* ---------- 工具栏 ---------- */
+  /* ---------- 工具栏（三段卡片式：左筛选 / 中搜索 / 右操作） ---------- */
   .toolbar {
-    display: flex; align-items: center; gap: var(--s-3);
-    margin-bottom: var(--s-4);
-  }
-  .toolbar .filter-group,
-  .toolbar .action-group {
     display: flex; align-items: center; gap: var(--s-2);
+    margin-bottom: var(--s-4);
+    flex-wrap: wrap; row-gap: var(--s-2);
+  }
+  .tb-card {
+    display: flex; align-items: center; gap: 6px;
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: var(--r-md);
-    padding: 6px;
+    padding: 5px 8px;
     box-shadow: var(--sh-1);
   }
-  .toolbar .filter-group { flex: 1 1 600px; min-width: 0; }
-  .toolbar .action-group { flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
-  /* 工具栏两行内：flex-wrap 让控件随窗口宽度自然换行；
-     row-gap > col-gap，保证换行后视觉不拥挤。 */
-  .toolbar .filter-group,
-  .toolbar .action-group {
-    flex-wrap: wrap;
-    row-gap: 8px;
+  .tb-filters { flex: 0 0 auto; flex-wrap: wrap; row-gap: 6px; }
+  .tb-search  { flex: 1 1 320px; min-width: 220px; }
+  .tb-actions { flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 4px; row-gap: 6px; }
+  /* 中窄屏（≤1366）：操作组落入第二行时占满整行并左对齐，
+     避免「右侧空、左侧重」的失衡；宽屏（>1366）则三段同行。 */
+  @media (max-width: 1366px) {
+    .tb-actions { flex: 1 1 100%; justify-content: flex-start; }
   }
-  .toolbar .group-label {
-    font-size: var(--fs-xs); color: var(--muted); margin: 0 6px 0 4px;
-    text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
-    white-space: nowrap;       /* 防止「项目 / 负责人 / 每页」被竖向拆字 */
-    flex-shrink: 0;
+
+  /* 组内字段标签：始终横排，不被拆成竖向单字 */
+  .tb-group-label {
+    font-size: var(--fs-xs); color: var(--muted); font-weight: 600;
+    white-space: nowrap; flex-shrink: 0; margin-right: 2px;
   }
-  .toolbar .search-select { flex-shrink: 1; min-width: 140px; }
-  .toolbar .chip-search { flex: 1 1 240px; min-width: 200px; max-width: 420px; }
+  .tb-sep {
+    width: 1px; height: 20px; background: var(--border);
+    margin: 0 2px; flex-shrink: 0;
+  }
+  /* 搜索下拉：不再被 content 强行撑宽，给一个可控最小宽度 */
+  .toolbar .search-select { flex-shrink: 1; min-width: 150px; }
   .toolbar select { flex-shrink: 0; }
   .toolbar select, .toolbar .search-select input {
     width: auto; padding: 6px var(--s-3);
@@ -234,16 +237,15 @@
     transition: background .15s, border-color .15s;
   }
   .toolbar select:hover, .toolbar .search-select input:hover { background: var(--panel-soft); }
-  .toolbar .divider {
-    width: 1px; height: 22px; background: var(--border); margin: 0 4px;
-  }
-  .toolbar .chip-search {
-    margin-left: var(--s-2);
+  /* 中段搜索卡片：独占一整段，吸纳所有剩余横向空间 */
+  .tb-search .chip-search {
+    flex: 1; min-width: 0;
     background: var(--panel-soft);
     border: 1px solid transparent;
-    min-width: 240px; max-width: 420px;
+    border-radius: var(--r-sm);
+    margin-left: 0;
   }
-  .toolbar .chip-search:focus-within {
+  .tb-search .chip-search:focus-within {
     background: #fff; border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-ring);
   }
@@ -1166,28 +1168,32 @@
     </div>
 
     <div class="toolbar">
-      <div class="filter-group">
-        <span class="group-label">项目</span>
+      <!-- 左：筛选 -->
+      <div class="tb-card tb-filters">
+        <span class="tb-group-label">项目</span>
         <div class="search-select" id="projectPicker">
           <input type="text" id="projectInput" placeholder="搜索或选择项目…" autocomplete="off" spellcheck="false">
           <span class="caret">▾</span>
           <div class="search-select-menu" id="projectMenu" hidden></div>
         </div>
-        <span class="divider"></span>
-        <span class="group-label">负责人</span>
+        <span class="tb-sep"></span>
+        <span class="tb-group-label">负责人</span>
         <div class="search-select" id="ownerPicker">
           <input type="text" id="ownerInput" placeholder="全部负责人" autocomplete="off" spellcheck="false">
           <span class="caret">▾</span>
           <div class="search-select-menu" id="ownerMenu" hidden></div>
         </div>
-        <span class="divider"></span>
-        <span class="group-label">每页</span>
+        <span class="tb-sep"></span>
+        <span class="tb-group-label">每页</span>
         <select id="pageSize" onchange="onPageSizeChange()">
           {% for opt in page_size_options %}
           <option value="{{ opt }}" {% if opt == 50 %}selected{% endif %}>{{ opt }}</option>
           {% endfor %}
         </select>
-        <span class="divider"></span>
+      </div>
+
+      <!-- 中：搜索（独占一段，吸纳剩余空间） -->
+      <div class="tb-card tb-search">
         <div class="chip-search" id="chipSearch">
           <div class="chip-area" id="chipArea"></div>
           <div class="search-input" id="titleSearchWrap">
@@ -1198,7 +1204,9 @@
           <div class="search-select-menu" id="titleMenu" hidden></div>
         </div>
       </div>
-      <div class="action-group">
+
+      <!-- 右：操作（功能操作 / 业务操作 两块） -->
+      <div class="tb-card tb-actions">
         <button id="overdueBtn" class="pill-btn" onclick="toggleOverdueView()" title="查看所有已过期且未完成的任务">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M9 2h6"/></svg>
           <span id="overdueBtnLabel">延期任务</span>
@@ -1211,7 +1219,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.2" fill="currentColor"/><circle cx="3.5" cy="12" r="1.2" fill="currentColor"/><circle cx="3.5" cy="18" r="1.2" fill="currentColor"/></svg>
           列设置
         </button>
-        <span class="divider"></span>
+        <span class="tb-sep"></span>
         <div class="export-switch" id="exportSwitch">
           <button type="button" class="seg" id="expTasks" onclick="setExportMode('tasks')">仅任务</button>
           <button type="button" class="seg active" id="expComments" onclick="setExportMode('comments')">含评论</button>
