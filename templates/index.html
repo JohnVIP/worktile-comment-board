@@ -506,6 +506,18 @@
     line-height: 1.45;
     vertical-align: middle;
   }
+  /* 描述列：直接展示任务详情页「描述」属性值；长文本自然换行（与 title 同策略）。
+     次级文字色弱化视觉权重；hover 时 td 的 title 属性显示完整文本。 */
+  table.proj-table td.cell-desc {
+    min-width: 60px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.5;
+    vertical-align: middle;
+    color: var(--text-2, #64748b);
+  }
+  table.proj-table td.cell-desc .desc-text { display: inline; }
   /* 任务负责人（窄列下不拆字符 + 截断省略号）。
      updated 列单独走两行渲染（日期 + 时间各一段），不在这里命中。
      命中规则必须用 .cell-* class，不能用 nth-last-child(-n+2)，否则列序变动时会误伤其他列。 */
@@ -1277,6 +1289,7 @@ const COLS_META = [
   { key: "proj",     label: "项目名称",     width: 200, anchor: true,    mode: "fixed" },
   { key: "code",     label: "任务编号",     width: 110,               mode: "auto"  },
   { key: "title",    label: "任务名称",     width: 270,               mode: "auto"  },
+  { key: "desc",     label: "描述",        width: 240,               mode: "fixed" },
   { key: "owner",    label: "任务负责人",   width: 130,               mode: "auto"  },
   { key: "due",      label: "截止时间",     width: 150,               mode: "auto"  },  // 仅「延期任务」视图显示
   { key: "overdue",  label: "逾期天数",     width: 90,                mode: "auto"  },  // 仅「延期任务」视图显示
@@ -2588,7 +2601,7 @@ function updateExportProgress(d){
 
 // ====================== 延期任务视图切换 ======================
 // 逾期视图使用独立的列布局（含 截止时间 / 逾期天数），与主看板布局互不污染
-const OVERDUE_ORDER = ["proj", "code", "title", "owner", "due", "overdue", "comments", "updated"];
+const OVERDUE_ORDER = ["proj", "code", "title", "desc", "owner", "due", "overdue", "comments", "updated"];
 const OVERDUE_VISIBLE = Object.fromEntries(OVERDUE_ORDER.map(k => [k, true]));
 // proj 列固定 180px（避免长项目名撑宽整表；与用户保存的自定义宽度一致）；
 // 其他列保持 auto（按内容自适应）；只有 comments 是 fixed（中间可拖拽列）。
@@ -2846,6 +2859,15 @@ function renderTable(items){
           case "title":
             html += `<td class="cell-title"${dataMode}${fixStyle}>${buildTaskTitle(t)}</td>`;
             break;
+          case "desc": {
+            // 描述：直接取任务详情页「描述」属性值（normalize_task 已提取到 t.desc）；
+            // 缺则空。white-space:normal + 任意位置断行（CSS td.cell-desc），
+            // 长描述自然换行；hover 显示完整文本。
+            const raw = (t.desc || "").trim();
+            html += `<td class="cell-desc"${dataMode}${fixStyle} title="${escapeHtml(raw)}">`
+              + (raw ? `<span class="desc-text">${escapeHtml(raw)}</span>` : '') + '</td>';
+            break;
+          }
           case "comments":
             html += `<td class="cell-comments" data-comments="${escapeHtml(t.task_id)}"${dataMode}${fixStyle}>${commentsHtml}</td>`;
             break;
@@ -3028,6 +3050,12 @@ function renderOverdueTable(items){
         case "title":
           html += `<td class="cell-title"${dataMode}${fixStyle}>${buildTaskTitle(t)}</td>`;
           break;
+        case "desc": {
+          const raw = (t.desc || "").trim();
+          html += `<td class="cell-desc"${dataMode}${fixStyle} title="${escapeHtml(raw)}">`
+            + (raw ? `<span class="desc-text">${escapeHtml(raw)}</span>` : '') + '</td>';
+          break;
+        }
         case "comments":
           html += `<td class="cell-comments" data-comments="${escapeHtml(t.task_id)}"${dataMode}${fixStyle}>${commentsHtml}</td>`;
           break;

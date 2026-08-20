@@ -116,10 +116,10 @@ def test_build_workbook_with_comments():
     wb = load_workbook(io.BytesIO(wb_bytes))
     assert wb.sheetnames == ["任务", "评论"]
     ws = wb["任务"]
-    assert [c.value for c in ws[1]] == ["任务ID", "编号", "标题", "项目", "负责人",
+    assert [c.value for c in ws[1]] == ["任务ID", "编号", "标题", "描述", "项目", "负责人",
                                         "是否完成", "更新时间", "截止时间", "逾期天数", "评论数"]
     assert ws.cell(row=2, column=1).value == "1"
-    assert ws.cell(row=2, column=9).value == "-"  # 普通看板逾期天数显示 -
+    assert ws.cell(row=2, column=10).value == "-"  # 普通看板逾期天数显示 -（描述列插入后顺延）
     cs = wb["评论"]
     assert cs.cell(row=2, column=4).value == "小王"
     assert cs.cell(row=2, column=6).value == "评论内容"

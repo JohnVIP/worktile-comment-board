@@ -712,10 +712,20 @@ class WorktileClient:
                       or task.get("state_type")
                       or _first(props, ["task_state", "state_type"]))
         is_completed = _is_completed(task, props)
+        # 描述：任务详情页的「描述」属性，API 字段标识为 desc。
+        # 列表接口（V1 get-project-tasks-by-page）通常在顶层带 desc；
+        # V2 的 properties 也可能含 desc/description。逐一兜底，缺则空串。
+        desc = (task.get("desc")
+                or task.get("description")
+                or props.get("desc")
+                or props.get("description")
+                or "")
+        desc = str(desc).strip() if desc else ""
         return {
             "task_id": task_id,
             "identifier": identifier,
             "title": title,
+            "desc": desc,
             "project_id": project_id,
             "project_name": project_name,
             "assignee": assignee,

@@ -712,6 +712,7 @@ def _run_export(s, view, project_id, owner_filter, keyword, with_comments, job=N
         "task_id": t.get("task_id", ""),
         "identifier": t.get("identifier", ""),
         "title": t.get("title", ""),
+        "desc": t.get("desc", ""),
         "project_name": t.get("project_name", ""),
         "assignee": t.get("assignee", ""),
         "is_completed": t.get("is_completed", False),

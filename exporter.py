@@ -61,7 +61,7 @@ def build_workbook(task_rows, comment_rows, with_comments=True):
     ws = wb.active
     ws.title = "任务"
 
-    task_headers = ["任务ID", "编号", "标题", "项目", "负责人", "是否完成",
+    task_headers = ["任务ID", "编号", "标题", "描述", "项目", "负责人", "是否完成",
                     "更新时间", "截止时间", "逾期天数", "评论数"]
     ws.append(task_headers)
     for c in range(1, len(task_headers) + 1):
@@ -77,6 +77,7 @@ def build_workbook(task_rows, comment_rows, with_comments=True):
             t.get("task_id", ""),
             t.get("identifier", ""),
             t.get("title", ""),
+            t.get("desc", ""),
             t.get("project_name", ""),
             t.get("assignee", ""),
             "是" if t.get("is_completed") else "否",

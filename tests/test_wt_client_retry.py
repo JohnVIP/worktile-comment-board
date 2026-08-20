@@ -160,6 +160,25 @@ def test_get_file_stream_retries_429():
     assert calls["n"] == 2, f"429 后重试成功应请求 2 次，实际 {calls['n']}"
 
 
+def test_normalize_task_extracts_desc():
+    c = make_client()
+    # 1) 顶层 desc 直接提取
+    t1 = c.normalize_task({"_id": "a1", "title": "T1", "desc": "  这是描述  "}, project_name="P")
+    assert t1["desc"] == "这是描述", f"顶层 desc 应去空白，实际 {t1['desc']!r}"
+    # 2) description 兜底
+    t2 = c.normalize_task({"_id": "a2", "title": "T2", "description": "备选描述"}, project_name="P")
+    assert t2["desc"] == "备选描述", f"description 兜底，实际 {t2['desc']!r}"
+    # 3) properties.desc 兜底
+    t3 = c.normalize_task({"_id": "a3", "title": "T3", "properties": {"desc": "属性描述"}}, project_name="P")
+    assert t3["desc"] == "属性描述", f"properties.desc 兜底，实际 {t3['desc']!r}"
+    # 4) 都没有 → 空串
+    t4 = c.normalize_task({"_id": "a4", "title": "T4"}, project_name="P")
+    assert t4["desc"] == "", f"无描述应为空串，实际 {t4['desc']!r}"
+    # 5) desc 为 None → 空串
+    t5 = c.normalize_task({"_id": "a5", "title": "T5", "desc": None}, project_name="P")
+    assert t5["desc"] == "", f"desc=None 应为空串，实际 {t5['desc']!r}"
+
+
 if __name__ == "__main__":
     test_retry_429_then_ok()
     test_retry_after_header()
@@ -167,4 +186,5 @@ if __name__ == "__main__":
     test_non_retryable_raises_immediately()
     test_exhaust_retries_then_raise()
     test_get_file_stream_retries_429()
-    print("全部 6 个重试测试通过 ✓")
+    test_normalize_task_extracts_desc()
+    print("全部 7 个重试/字段测试通过 ✓")
