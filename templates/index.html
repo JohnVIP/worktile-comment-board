@@ -96,6 +96,8 @@
   .login-card p.sub { color: var(--muted); margin: 0 0 var(--s-6); font-size: var(--fs-sm); }
   label.field { display: block; margin-bottom: var(--s-4); }
   label.field span { display: block; margin-bottom: var(--s-2); font-weight: 600; font-size: var(--fs-sm); color: var(--text-2); }
+  label.field .required { color: #dc2626; margin-left: 4px; font-weight: 700; }
+  label.field input:required:invalid:not(:placeholder-shown) { border-color: #fca5a5; }
   input[type=text], input[type=password], select {
     width: 100%; padding: 10px var(--s-3); border: 1px solid var(--border);
     border-radius: var(--r-md); font-size: var(--fs-md); background: #fff; color: var(--text);
@@ -1222,8 +1224,8 @@
         <input type="password" id="clientSecret" placeholder="请输入 Client Secret" autocomplete="off">
       </label>
       <label class="field">
-        <span>Worktile 域名（用于跳转任务详情页）</span>
-        <input type="text" id="tenantInput" value="techwll.worktile.com"
+        <span>Worktile 域名（用于跳转任务详情页）<span class="required" title="必填">*</span></span>
+        <input type="text" id="tenantInput" required
                placeholder="如 techwll.worktile.com" autocomplete="off" spellcheck="false">
       </label>
       <button id="loginBtn" style="width:100%" onclick="doLogin()">进入看板</button>
@@ -1959,8 +1961,14 @@ async function doLogin(){
   alert.classList.add("hidden");
   const clientId = document.getElementById("clientId").value.trim();
   const clientSecret = document.getElementById("clientSecret").value.trim();
+  const tenant = document.getElementById("tenantInput").value.trim();
   if (!clientId || !clientSecret){
     alert.textContent = "Client ID 和 Client Secret 均不能为空";
+    alert.classList.remove("hidden");
+    return;
+  }
+  if (!tenant){
+    alert.textContent = "Worktile 域名不能为空（用于跳转任务详情页）";
     alert.classList.remove("hidden");
     return;
   }
@@ -1972,7 +1980,7 @@ async function doLogin(){
       body: JSON.stringify({
         client_id: clientId,
         client_secret: clientSecret,
-        tenant: document.getElementById("tenantInput").value.trim()
+        tenant: tenant
       })
     });
     if (r.tenant_host) state.tenantHost = r.tenant_host;
