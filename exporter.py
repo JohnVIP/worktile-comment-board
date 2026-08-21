@@ -61,8 +61,8 @@ def build_workbook(task_rows, comment_rows, with_comments=True):
     ws = wb.active
     ws.title = "任务"
 
-    task_headers = ["任务ID", "编号", "标题", "描述", "项目", "负责人", "状态", "是否完成",
-                    "更新时间", "开始时间", "截止时间", "逾期天数", "评论数"]
+    task_headers = ["任务ID", "编号", "标题", "描述", "描述图片", "项目", "负责人", "状态",
+                    "是否完成", "更新时间", "开始时间", "截止时间", "逾期天数", "评论数"]
     ws.append(task_headers)
     for c in range(1, len(task_headers) + 1):
         cell = ws.cell(row=1, column=c)
@@ -73,11 +73,15 @@ def build_workbook(task_rows, comment_rows, with_comments=True):
     for t in task_rows:
         overdue = t.get("overdue_days")
         overdue_str = "-" if overdue is None else str(overdue)
+        # 描述图片：URL 列表按换行拼成多行，便于在 Excel 内逐个查看
+        desc_imgs = t.get("desc_images") or []
+        desc_img_str = "\n".join(str(u) for u in desc_imgs) if desc_imgs else ""
         ws.append([
             t.get("task_id", ""),
             t.get("identifier", ""),
             t.get("title", ""),
             t.get("desc", ""),
+            desc_img_str,
             t.get("project_name", ""),
             t.get("assignee", ""),
             t.get("status", ""),
@@ -88,6 +92,10 @@ def build_workbook(task_rows, comment_rows, with_comments=True):
             overdue_str,
             t.get("comment_count", 0),
         ])
+    # 描述（第 4 列）与描述图片（第 5 列）自动换行，便于阅读长文本 / 多链接
+    for r in range(2, ws.max_row + 1):
+        ws.cell(row=r, column=4).alignment = _WRAP_TOP
+        ws.cell(row=r, column=5).alignment = _WRAP_TOP
     _autosize(ws, len(task_headers))
     ws.freeze_panes = "A2"
 

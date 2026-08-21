@@ -105,6 +105,7 @@ def test_build_workbook_with_comments():
     task_rows = [
         {"task_id": "1", "identifier": "T-1", "title": "写方案", "project_name": "项目P1",
          "assignee": "u1", "status": "进行中", "is_completed": False,
+         "desc": "方案描述", "desc_images": ["https://img/a.png", "https://img/b.png"],
          "updated_at_str": "2026-08-20 10:00", "start_at_str": "2026-08-19 09:00",
          "due_at_str": "-", "overdue_days": None, "comment_count": 1},
     ]
@@ -117,13 +118,15 @@ def test_build_workbook_with_comments():
     wb = load_workbook(io.BytesIO(wb_bytes))
     assert wb.sheetnames == ["任务", "评论"]
     ws = wb["任务"]
-    assert [c.value for c in ws[1]] == ["任务ID", "编号", "标题", "描述", "项目", "负责人",
-                                        "状态", "是否完成", "更新时间", "开始时间", "截止时间",
-                                        "逾期天数", "评论数"]
+    assert [c.value for c in ws[1]] == ["任务ID", "编号", "标题", "描述", "描述图片", "项目",
+                                        "负责人", "状态", "是否完成", "更新时间", "开始时间",
+                                        "截止时间", "逾期天数", "评论数"]
     assert ws.cell(row=2, column=1).value == "1"
-    assert ws.cell(row=2, column=7).value == "进行中"     # 状态
-    assert ws.cell(row=2, column=10).value == "2026-08-19 09:00"  # 开始时间
-    assert ws.cell(row=2, column=12).value == "-"         # 逾期天数（描述/状态/开始时间 3 列插入后顺延）
+    assert ws.cell(row=2, column=4).value == "方案描述"   # 描述
+    assert ws.cell(row=2, column=5).value == "https://img/a.png\nhttps://img/b.png"  # 描述图片
+    assert ws.cell(row=2, column=8).value == "进行中"     # 状态
+    assert ws.cell(row=2, column=11).value == "2026-08-19 09:00"  # 开始时间
+    assert ws.cell(row=2, column=13).value == "-"         # 逾期天数（描述/状态/开始时间 3 列插入后顺延）
     cs = wb["评论"]
     assert cs.cell(row=2, column=4).value == "小王"
     assert cs.cell(row=2, column=6).value == "评论内容"

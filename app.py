@@ -797,6 +797,7 @@ def _run_export(s, view, project_id, owner_filter, keyword, with_comments, job=N
         "identifier": t.get("identifier", ""),
         "title": t.get("title", ""),
         "desc": t.get("desc", ""),
+        "desc_images": t.get("desc_images", []),
         "project_name": t.get("project_name", ""),
         "assignee": t.get("assignee", ""),
         "status": t.get("status", ""),
