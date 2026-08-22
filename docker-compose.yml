@@ -9,10 +9,12 @@ services:
     environment:
       - PORT=5080
       - FERNET_KEY=${FERNET_KEY}     # 从同目录 .env 读取，务必自己生成并固定
-    # 持久化会话文件（容器重建/更新后已登录的租户不丢登录态）。
-    # 只挂单个文件，切勿把整个 /app 挂出来（会覆盖应用代码）。
+    # 持久化会话目录（容器重建/更新后已登录的租户不丢登录态）。
+    # 必须挂目录而不是单文件：命名卷挂到镜像内不存在的文件路径时，
+    # Docker 会把挂载点创建成目录，应用写 sessions.json 会报 IsADirectoryError，
+    # 登录态静默丢失。应用现在把加密会话写到 data/sessions.json。
     volumes:
-      - wt_sessions:/app/sessions.json
+      - wt_sessions:/app/data
 
 volumes:
   wt_sessions:                      # 命名卷，由 docker 管理，跨容器重建保留

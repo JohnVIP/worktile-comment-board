@@ -8,7 +8,14 @@ set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
-VENV_PY="/Users/john/.workbuddy/binaries/python/envs/wt-board/bin/python"
+# Python 解释器：优先项目内 .venv，其次历史路径，最后回退系统 python3
+if [ -x "$DIR/.venv/bin/python" ]; then
+  VENV_PY="$DIR/.venv/bin/python"
+elif [ -x "/Users/john/.workbuddy/binaries/python/envs/wt-board/bin/python" ]; then
+  VENV_PY="/Users/john/.workbuddy/binaries/python/envs/wt-board/bin/python"
+else
+  VENV_PY="$(command -v python3)"
+fi
 CF="/usr/local/bin/cloudflared"
 PORT=5080
 
