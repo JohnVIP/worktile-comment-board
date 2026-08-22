@@ -51,7 +51,8 @@ class FakeClient(WorktileClient):
         self._FETCH_PAGE = 200
         self._file_cache = {}
 
-    def _iter_all_tasks(self, projects, project_id, page_size, member_map):
+    def _iter_all_tasks(self, projects, project_id, page_size, member_map,
+                        force=False):
         for t in TASKS:
             yield t, t["project_name"]
 
