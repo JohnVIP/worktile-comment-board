@@ -33,16 +33,31 @@ $PY app.py
 
 ```
 app.py              Flask 后端（会话管理、接口代理）
-wt_client.py        Worktile OpenAPI 客户端（运行时凭证、评论解析）
-templates/index.html 前端看板页面
-requirements.txt    依赖
+wt/                 Worktile OpenAPI 客户端包
+  client.py         WorktileClient（认证 / 重试 / 任务 / 评论 / 文件 / 缓存）
+  textutil.py       字段与时间解析、描述抽取等纯函数
+  richtext.py       评论富文本 → 纯文本、@mention、emoji
+  audit.py          描述抽取诊断环形缓冲
+wt_client.py        兼容入口（re-export wt 包，历史 import 不受影响）
+exporter.py         Excel 导出（openpyxl）
+templates/index.html 前端 HTML 骨架（165 行）
+static/css/board.css 前端样式
+static/js/board.js   前端逻辑（列渲染 board/overdue 两视图共用）
+tests/              pytest 测试（api 修复回归 + 重试/字段 + 导出）
+requirements.txt    运行时依赖（版本锁定）
+requirements-dev.txt 测试依赖
+data/               运行时数据（加密会话 sessions.json，Docker 卷挂载点）
 ```
+
+> CI：GitHub Actions（`.github/workflows/ci.yml`）在 push / PR 时跑
+> 编译检查 + 全部 pytest（`pip install -r requirements.txt -r requirements-dev.txt`）。
 
 ## 说明与已知限制
 
 - **仅支持公有云**。如需私有部署，可在 `app.py` 的登录接口传入 `base_url`。
 - **会话持久化**：为满足「不重复输入凭证」，登录态（含加密后的 Client ID / Secret）
-  会保存在项目目录下的 `sessions.json`（以 `.secret` 中的密钥加密，文件权限 600）。
+  会保存在 `data/sessions.json`（以 `.secret` 中的密钥加密，文件权限 600；
+  旧版放在项目根目录的 `sessions.json` 首次启动时自动迁移）。
   服务重启或浏览器关闭后打开都会自动恢复登录态，会话有效期 30 天。
   若需彻底清除，点击看板右上角「退出登录」即可；也会删除这两个本地文件。
 - 评论数据来自「任务详情」接口，需逐任务查询，因此采用展开时按需加载。
@@ -52,7 +67,9 @@ requirements.txt    依赖
 - 任务列表接口若不返回 `total`，分页栏将以「还有更多 / 上一页下一页」方式呈现。
 - **导出性能与超时**：「一键导出 Excel」「含评论」模式下，每条任务都要单独请求评论接口，因此耗时 ≈ 任务数 × 单次评论请求耗时。当 `project_id=全部项目` 且任务/项目很多时，导出可能持续**数分钟**，并在「仅任务」模式下仍需全量遍历任务列表。部署时务必把 gunicorn worker 超时调大（例如 `--timeout 300`，或用 `timeout` 指令），否则长请求会被 worker 杀掉返回 502。评论拉取已做并发 3 + 429 退避重试兜底。
 - **导出文件结构**：`.xlsx` 含「任务」sheet（任务ID / 编号 / 标题 / 项目 / 负责人 / 是否完成 / 更新时间 / 截止时间 / 逾期天数 / 评论数）与（含评论时）「评论」sheet（任务ID / 任务标题 / 项目 / 评论人 / 评论时间 / 评论内容 / 附件）。逾期天数仅在「延期任务」视图导出时有意义，普通看板导出显示 `-`。
-- **导出进度**：前端采用「启动任务 → 轮询进度 → 下载」三段式，弹出的浮层会显示真实进度——收集任务数、评论拉取进度（已拉取 N/总数 个任务）、生成文件阶段与完成后的任务/评论总数。后端对应 `POST /api/export/start`、`GET /api/export/progress`、`GET /api/export/download`（旧的同步 `GET /api/export` 仍保留兼容）。
+- **导出进度**：前端采用「启动任务 → 轮询进度 → 下载」三段式，弹出的浮层会显示真实进度——收集任务数、评论拉取进度（已拉取 N/总数 个任务）、生成文件阶段与完成后的任务/评论总数。后端对应 `POST /api/export/start`、`GET /api/export/progress`、`GET /api/export/download`（三个接口均需登录会话，且作业只允许启动它的会话轮询/下载；旧的同步 `GET /api/export` 仍保留兼容）。
+- **描述补全缓存**：任务描述在服务端有实例级 TTL 缓存（默认 300 秒，含「无描述」的负缓存），翻页/刷新不会对同一任务反复打详情接口。需要实时描述时可设环境变量 `WT_DESC_CACHE_TTL=0` 关闭。
+- **调试接口**：`/api/debug/*` 默认关闭（404），排查字段解析问题时设环境变量 `WT_DEBUG=1` 开启；生产环境不要打开。
 
 ## 延期任务（口径与字段适配）
 
@@ -95,7 +112,7 @@ requirements.txt    依赖
 新增的生产文件：
 
 - `requirements.txt` —— 增加了 `cryptography`、`gunicorn`
-- `Procfile` —— `web: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 60`
+- `Procfile` —— `web: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300`
 - `runtime.txt` —— 指定 Python `3.13.12`
 
 > ⚠️ **必须用单 worker（`--workers 1`）**：登录态存在进程内存的 `SESSIONS` 字典里，多 worker 时请求可能被分到没有该会话的进程，导致用户被随机踢回登录页。低流量测试单 worker + 4 线程完全够用。
@@ -164,6 +181,9 @@ docker compose up -d
 | --- | --- |
 | `PORT` | 容器内监听端口，默认 `5080`，一般不用改 |
 | `FERNET_KEY` | 会话文件加密密钥。**必须固定**：变了会让已保存会话解密失败、用户需重登。用 `.env` 或云主机环境变量注入 |
+| `WT_DEBUG` | 调试接口开关，默认关闭；设 `1` 开放 `/api/debug/*`（仅排查用） |
+| `WT_DESC_CACHE_TTL` | 任务描述缓存秒数，默认 `300`；设 `0` 关闭缓存 |
+| `WT_TASKS_CACHE_TTL` | 全量任务列表缓存秒数（搜索/typeahead/导出/延期共用），默认 `120`；设 `0` 关闭。延期视图「刷新」会绕过 |
 
 > 密钥加载优先级：环境变量 `FERNET_KEY` → 本地 `.secret` 文件 → 临时随机（仅本次进程）。部署时务必通过 `.env` / 平台 Secrets 固定 `FERNET_KEY`。
 
