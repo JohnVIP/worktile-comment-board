@@ -25,6 +25,10 @@ from wt_client import WorktileClient, _pick_desc_from_obj, _pick_desc_with_path,
 from exporter import build_workbook
 
 app = Flask(__name__)
+# 模板每次请求都从磁盘重读（默认 debug=False 会缓存 Jinja 模板，
+# 导致改 templates/index.html 后看不到效果，需要重启服务）
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.jinja_env.auto_reload = True
 # 部署在反向代理 / 负载均衡后时，让 request.is_secure / remote_addr 识别真实情况，
 # 这是正确设置 Secure cookie 与防御的基础。
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
