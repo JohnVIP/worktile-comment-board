@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: 安装依赖（运行时 + 测试）
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: 语法编译检查
+        run: python -m compileall -q app.py exporter.py wt_client.py wt/
+
+      - name: 单元测试
+        run: python -m pytest tests/ -v
+
+      - name: 脚本式测试（历史入口，双保险）
+        run: python tests/test_wt_client_retry.py
