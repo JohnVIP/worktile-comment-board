@@ -21,7 +21,9 @@ from flask import (
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
 from cryptography.fernet import Fernet
-from wt_client import WorktileClient, _pick_desc_from_obj, _pick_desc_with_path, get_desc_audit_snapshot
+from wt.client import WorktileClient
+from wt.textutil import _pick_desc_from_obj
+from wt.audit import get_desc_audit_snapshot
 from exporter import build_workbook
 
 app = Flask(__name__)
@@ -35,8 +37,17 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 
 BASE_DIR = Path(__file__).resolve().parent
 SECRET_FILE = BASE_DIR / ".secret"          # 会话加密密钥（仅本机可读）
-SESSIONS_FILE = BASE_DIR / "sessions.json"  # 加密持久化的会话（仅存凭证，不含 token）
+# 会话文件放在 data/ 目录下而不是项目根：
+# Docker 里把命名卷挂到单文件路径（如 /app/sessions.json）时，镜像内不存在该文件，
+# Docker 会把挂载点创建成目录，write_bytes 随之报 IsADirectoryError（且被静默吞掉），
+# 登录态永远无法持久化。挂目录（/app/data）才是稳定做法。
+DATA_DIR = BASE_DIR / "data"
+SESSIONS_FILE = DATA_DIR / "sessions.json"  # 加密持久化的会话（仅存凭证，不含 token）
 SESSION_TIMEOUT = 30 * 24 * 3600            # 会话有效期 30 天，到期需重新登录
+MAX_SESSIONS = 200                          # 会话数上限（防无限制登录把内存/磁盘撑爆）
+EXPORT_JOB_TTL_DONE = 600                   # 已完成/失败导出作业的保留时长（秒）
+EXPORT_JOB_TTL_RUNNING = 3600               # 运行中作业超过该时长视为僵死并回收
+MAX_EXPORT_JOBS = 50                        # 导出作业总数上限（超量淘汰最旧）
 
 
 def _load_key():
@@ -102,11 +113,13 @@ def _persist_save():
             "created_at": s.get("created_at", time.time()),
         }
     try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
         data = _FERNET.encrypt(json.dumps(payload).encode())
         SESSIONS_FILE.write_bytes(data)
         os.chmod(SESSIONS_FILE, 0o600)
     except Exception:
-        pass
+        # 持久化失败不该阻塞请求，但必须留痕：静默吞掉会让「重启丢登录态」无迹可循
+        app.logger.warning("保存会话文件 %s 失败", SESSIONS_FILE, exc_info=True)
 
 
 def _normalize_tenant(tenant):
@@ -125,6 +138,17 @@ def _normalize_tenant(tenant):
         t = t.split(sep, 1)[0]
     t = t.strip().rstrip("/")
     return t or DEFAULT_TENANT_HOST
+
+
+def _migrate_legacy_sessions_file():
+    """旧版本把 sessions.json 放在项目根目录，统一迁移到 data/ 下（只迁一次）。"""
+    legacy = BASE_DIR / "sessions.json"
+    if legacy.exists() and not SESSIONS_FILE.exists():
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            os.replace(legacy, SESSIONS_FILE)
+        except Exception:
+            app.logger.warning("迁移旧会话文件失败", exc_info=True)
 
 
 def _persist_load():
@@ -149,9 +173,10 @@ def _persist_load():
                 "created_at": c.get("created_at", now),
             }
     except Exception:
-        pass
+        app.logger.warning("加载会话文件 %s 失败", SESSIONS_FILE, exc_info=True)
 
 
+_migrate_legacy_sessions_file()
 _persist_load()
 
 
@@ -234,9 +259,38 @@ def handle_400(e):
     return jsonify({"ok": False, "error": str(e.description or "请求参数错误")}), 400
 
 
+def _debug_enabled():
+    """调试接口开关：默认关闭，设环境变量 WT_DEBUG=1 才开启。
+
+    /api/debug/* 会透出上游 API 的原始结构（含成员/评论字段），生产部署不应打开。"""
+    return os.environ.get("WT_DEBUG") == "1"
+
+
+# 静态资源（CSS/JS）带版本号 URL，可长缓存；文件更新后版本号变化自动失效
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 31536000
+
+_STATIC_ASSETS = ("css/board.css", "js/board.js")
+
+
+def _asset_ver():
+    """静态资源版本号（取相关文件 mtime 的最大值）。
+
+    每次渲染首页时现算（一次 stat，开销可忽略）：改完 CSS/JS 刷新页面即可生效，
+    无需重启服务；URL 变化同时绕过浏览器与中间代理的缓存。
+    """
+    static_dir = Path(app.static_folder)
+    try:
+        mt = max((static_dir / p).stat().st_mtime for p in _STATIC_ASSETS)
+        return str(int(mt))
+    except OSError:
+        return "0"
+
+
 @app.route("/")
 def index():
-    resp = make_response(render_template("index.html", page_size_options=PAGE_SIZE_OPTIONS))
+    resp = make_response(render_template("index.html",
+                                         page_size_options=PAGE_SIZE_OPTIONS,
+                                         asset_ver=_asset_ver()))
     # 防止浏览器缓存 HTML，避免用户看不到新版 UI
     resp.headers["Cache-Control"] = "no-store, must-revalidate"
     resp.headers["Pragma"] = "no-cache"
@@ -278,6 +332,11 @@ def login():
             "member_map": None,  # 懒加载
             "created_at": time.time(),
         }
+        # 会话数超上限时淘汰最旧的：防止失控/恶意客户端无限登录，
+        # 把内存（每个会话一个 WorktileClient）和 sessions.json 撑爆
+        while len(SESSIONS) > MAX_SESSIONS:
+            oldest = min(SESSIONS.items(), key=lambda kv: kv[1].get("created_at", 0))[0]
+            SESSIONS.pop(oldest, None)
         _persist_save()
     resp = jsonify({
         "ok": True,
@@ -506,8 +565,14 @@ def tasks_overdue():
         else:
             collected, diag = _compute_overdue(s, member_map, now, project_id,
                                                count_only=count_only,
-                                               owner_filter=owner_filter)
-            s["_overdue_cache"] = (now, collected, cache_key, diag)
+                                               owner_filter=owner_filter,
+                                               force=force)
+            # 探测模式（count_only）不写缓存：它用空 member_map 规范化、
+            # 跳过描述补全与排序，若写入会让随后的正式视图在缓存有效期内
+            # 拿到「负责人显示 uid、无描述、未排序」的脏数据。
+            # 探测仍可读缓存（total 与正式视图口径一致）。
+            if not count_only:
+                s["_overdue_cache"] = (now, collected, cache_key, diag)
         # 透出实际生效的 project_name，前端可用它同步顶部项目筛选框
         if project_id == "__all__":
             project_name = "全部项目（延期任务）"
@@ -558,11 +623,12 @@ def tasks_overdue():
 
 
 def _compute_overdue(s, member_map, now, project_id="__all__", count_only=False,
-                      owner_filter=None):
+                      owner_filter=None, force=False):
     """遍历目标范围（单项目或全部项目），筛出已过期且未完成的任务，返回 (列表, 诊断)。
 
     project_id="__all__" 时跨全部项目；传具体项目 id 时仅扫该项目。
     count_only=True 时跳过 sort、不返回 items（仅探测 total，给 badge 数字用）。
+    force=True 绕过底层任务列表缓存（WorktileClient._fetch_raw_tasks）重新拉取。
     owner_filter：
       - None / ""         → 不过滤
       - "__unassigned__"  → 只收 _assignee_uid 为空的任务
@@ -580,7 +646,7 @@ def _compute_overdue(s, member_map, now, project_id="__all__", count_only=False,
             "sample_due_str": None, "sample_status": None}
     for t, _pname in s["client"]._iter_all_tasks(
             s["projects"], project_id, page_size=WorktileClient._FETCH_PAGE,
-            member_map=member_map):
+            member_map=member_map, force=force):
         diag["scanned"] += 1
         due = t.get("due_at")
         if due is not None:
@@ -644,6 +710,8 @@ def task_comments(task_id):
 @app.route("/api/debug/comments-raw/<task_id>", methods=["GET"])
 def debug_comments_raw(task_id):
     """临时调试：直接拉任务详情返回 comments 原始结构，便于查 author 字段"""
+    if not _debug_enabled():
+        abort(404)
     s = _require_session()
     try:
         data = s["client"]._req(
@@ -670,6 +738,8 @@ def debug_desc_audit():
 
     用法：先在浏览器访问 / 重启 enrich，再 curl /api/debug/desc-audit 看真实结构。
     """
+    if not _debug_enabled():
+        abort(404)
     snap = get_desc_audit_snapshot(limit=30)
     return jsonify({"ok": True, "count": len(snap), "items": snap})
 
@@ -684,6 +754,8 @@ def debug_task_detail(task_id):
     （更展开的 properties.desc 形态）。便于一眼看出 Worktile 究竟把描述放在
     哪个键里、嵌套了几层。
     """
+    if not _debug_enabled():
+        abort(404)
     s = _require_session()
     try:
         data = s["client"]._req("GET", f"/mission/tasks/{task_id}")
@@ -740,7 +812,18 @@ def file_proxy(file_id):
         data, ctype = s["client"].get_file_stream(file_id)
     except RuntimeError as e:
         return jsonify({"ok": False, "error": str(e)}), 502
-    return Response(data, mimetype=ctype)
+    resp = Response(data, mimetype=ctype)
+    # 防存储型 XSS：附件内容来自租户内任意用户上传，不可信。若上游返回
+    # text/html（或 SVG 直接导航打开），浏览器会以本站同源执行其中的脚本，
+    # 脚本可携带会话 Cookie 调用全部 API。统一加 nosniff + CSP sandbox；
+    # 对脚本载体类型（HTML/SVG/XML）再强制下载，杜绝内联渲染。
+    # <img> 缩略图不受影响（Content-Disposition 只作用于导航，不阻止子资源加载）。
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Content-Security-Policy"] = "sandbox"
+    if ctype in ("text/html", "application/xhtml+xml", "image/svg+xml",
+                 "application/xml", "text/xml"):
+        resp.headers["Content-Disposition"] = "attachment"
+    return resp
 
 
 # --------------------------------------------------------------------------- 导出作业（进度轮询）
@@ -748,6 +831,54 @@ def file_proxy(file_id):
 # 让前端能显示真实进度百分比与任务数。作业存内存，单租户单进程场景足够。
 EXPORT_JOBS = {}
 _EXPORT_LOCK = threading.Lock()
+
+
+def _sweep_stale_state():
+    """定期清理过期会话与过期导出作业（由后台 janitor 线程调用）。
+
+    - 会话原本只在「再次被访问」时才过期删除；不再回来的会话连同其
+      WorktileClient / 文件缓存会永久驻留内存，必须定期回收。
+    - 导出作业的 result 是完整 xlsx 字节流，用户不点下载就永远驻留；
+      done/error 的作业保留 EXPORT_JOB_TTL_DONE 秒，运行超时
+      EXPORT_JOB_TTL_RUNNING 秒的僵死作业一并回收。
+    """
+    now = time.time()
+    with _SESS_LOCK:
+        expired = [sid for sid, s in SESSIONS.items()
+                   if now - s.get("created_at", 0) > SESSION_TIMEOUT]
+        for sid in expired:
+            SESSIONS.pop(sid, None)
+        if expired:
+            _persist_save()
+    with _EXPORT_LOCK:
+        stale = []
+        for jid, job in EXPORT_JOBS.items():
+            age = now - job.get("created_at", now)
+            ttl = EXPORT_JOB_TTL_DONE if job["status"] in ("done", "error") \
+                else EXPORT_JOB_TTL_RUNNING
+            if age > ttl:
+                stale.append(jid)
+        for jid in stale:
+            EXPORT_JOBS.pop(jid, None)
+        # 总量保护：超上限时淘汰最旧的作业（正常使用不会同时挂这么多导出）
+        while len(EXPORT_JOBS) > MAX_EXPORT_JOBS:
+            oldest = min(EXPORT_JOBS.items(), key=lambda kv: kv[1].get("created_at", 0))[0]
+            EXPORT_JOBS.pop(oldest, None)
+
+
+def _start_janitor():
+    """启动后台清理线程（每 10 分钟扫一次，daemon 不阻塞退出）。"""
+    def _loop():
+        while True:
+            time.sleep(600)
+            try:
+                _sweep_stale_state()
+            except Exception:
+                app.logger.exception("后台清理线程异常")
+    threading.Thread(target=_loop, daemon=True, name="wt-janitor").start()
+
+
+_start_janitor()
 
 
 def _normalize_export_params(s, view, raw_pid, owner, keyword, with_comments):
@@ -892,7 +1023,11 @@ def export_start():
     job_id = secrets.token_hex(8)
     job = {"status": "running", "phase": "tasks", "task_count": 0,
            "comment_total": 0, "comment_done": 0, "error": None,
-           "result": None, "filename": None, "comment_count": 0}
+           "result": None, "filename": None, "comment_count": 0,
+           # 作业绑定启动它的会话：progress/download 只允许该会话访问，
+           # 防止他人在无会话的情况下凭 job_id 拿到含全部任务/评论的 xlsx
+           "sid": request.cookies.get(SID_COOKIE),
+           "created_at": time.time()}
     with _EXPORT_LOCK:
         EXPORT_JOBS[job_id] = job
     threading.Thread(
@@ -902,11 +1037,26 @@ def export_start():
     return jsonify({"ok": True, "job_id": job_id})
 
 
+def _get_export_job(job_id):
+    """按 job_id 取导出作业，并校验其归属当前会话。
+
+    所有导出作业接口都必须过 _require_session() 后再调用本函数；
+    作业不存在或属于别的会话时统一返回 None（外部表现为 404，不泄露作业是否存在）。
+    """
+    job = EXPORT_JOBS.get(job_id)
+    if not job:
+        return None
+    if job.get("sid") != request.cookies.get(SID_COOKIE):
+        return None
+    return job
+
+
 @app.route("/api/export/progress", methods=["GET"])
 def export_progress():
     """轮询导出进度；返回 status/phase/计数（真实任务数与评论拉取进度）。"""
+    _require_session()
     job_id = request.args.get("job_id")
-    job = EXPORT_JOBS.get(job_id)
+    job = _get_export_job(job_id)
     if not job:
         return jsonify({"ok": False, "error": "导出任务不存在或已过期"}), 404
     return jsonify({
@@ -925,8 +1075,9 @@ def export_progress():
 @app.route("/api/export/download", methods=["GET"])
 def export_download():
     """导出完成后按 job_id 取回 xlsx 文件；下载后清理作业释放内存。"""
+    _require_session()
     job_id = request.args.get("job_id")
-    job = EXPORT_JOBS.get(job_id)
+    job = _get_export_job(job_id)
     if not job:
         return jsonify({"ok": False, "error": "导出任务不存在或已过期"}), 404
     if job["status"] == "error":
