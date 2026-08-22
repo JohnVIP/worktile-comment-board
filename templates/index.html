@@ -1111,6 +1111,10 @@
   .col-modal-mask.hidden { display: none; }
   .col-modal {
     width: 460px; max-width: calc(100vw - 32px);
+    /* 弹窗高度上限：随视口缩放，桌面端最高 720px，避免列很多时撑满整屏；
+       flex 列布局让 header/footer 固定，body 单独滚动。 */
+    max-height: min(85vh, 720px);
+    display: flex; flex-direction: column;
     background: var(--panel); border-radius: 12px;
     box-shadow: 0 20px 60px rgba(0,0,0,.25);
     overflow: hidden; animation: colModalIn 0.18s ease-out;
@@ -1128,7 +1132,12 @@
     cursor: pointer;
   }
   .col-modal header .x:hover { background: #eef2f7; color: var(--text); }
-  .col-modal .modal-body { padding: 14px 20px 8px; }
+  .col-modal .modal-body {
+    padding: 14px 20px 8px;
+    /* 占据弹窗剩余高度，列很多时内部纵向滚动，header/footer 保持固定 */
+    flex: 1 1 auto; min-height: 0;
+    overflow-y: auto; overscroll-behavior: contain;
+  }
   .col-modal .modal-hint {
     font-size: 12.5px; color: var(--muted); margin: 0 0 12px; line-height: 1.6;
   }
@@ -1140,6 +1149,8 @@
     background: #fff; transition: border-color .12s, background .12s, box-shadow .12s;
     user-select: none;
   }
+  /* 滚动到底时最后一行也能与底部留点空隙，不被截 */
+  .col-modal .cols-list { padding-bottom: 4px; }
   .col-modal .col-row:hover { border-color: #c7d2fe; }
   .col-modal .col-row.dragging {
     opacity: 0.5; border-style: dashed;
