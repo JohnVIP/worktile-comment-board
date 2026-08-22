@@ -447,6 +447,12 @@ def tasks():
             WorktileClient.normalize_task(t, project_name=project_name, member_map=member_map)
             for t in raw.get("items", [])
         ]
+    # 计算逾期天数（仅当「有截止时间 + 未完成 + 已过期」时填充整数天；
+    # 其余情况置 None → 前端显示「—」）。普通看板现在也展示「逾期天数」列，需后端补这个字段。
+    now = time.time()
+    for it in items:
+        it["overdue_days"] = compute_overdue_days(it.get("due_at"), it.get("is_completed"), now)
+
     return jsonify({
         "ok": True,
         "project_name": project_name,
@@ -608,6 +614,16 @@ def _compute_overdue(s, member_map, now, project_id="__all__", count_only=False,
         # 探测场景下 total 已经在 collected 长度里，不需要有序
         collected.sort(key=lambda x: x.get("overdue_days", 0), reverse=True)
     return collected, diag
+
+
+def compute_overdue_days(due_at, is_completed, now):
+    """计算逾期天数：有截止时间 + 未完成 + 已过期 → 整数天；否则返回 None（前端显示「—」。
+
+    与 _compute_overdue 的判定口径一致，抽出便于复用与单测。
+    """
+    if due_at is None or is_completed or due_at >= now:
+        return None
+    return int((now - due_at) // 86400)
 
 
 @app.route("/api/tasks/<task_id>/comments", methods=["GET"])

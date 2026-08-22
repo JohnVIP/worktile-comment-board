@@ -231,5 +231,20 @@ def test_export_job_flow():
     assert p2.status_code == 404
 
 
+# --------------------------------------------------------------------------- 6. 逾期天数计算
+def test_compute_overdue_days():
+    now = 1_000_000_000
+    # 已过期 3 天且未完成 → 3
+    assert app_module.compute_overdue_days(now - 3 * 86400, False, now) == 3
+    # 刚好到期（due == now）→ None（不算逾期）
+    assert app_module.compute_overdue_days(now, False, now) is None
+    # 未到期（未来）→ None
+    assert app_module.compute_overdue_days(now + 86400, False, now) is None
+    # 已完成 → None（无论是否过期）
+    assert app_module.compute_overdue_days(now - 10 * 86400, True, now) is None
+    # 无截止时间 → None
+    assert app_module.compute_overdue_days(None, False, now) is None
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

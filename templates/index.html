@@ -1352,8 +1352,8 @@ const COLS_META = [
   { key: "status",   label: "状态",        width: 90,                mode: "auto"  },
   { key: "start",    label: "开始时间",     width: 170,               mode: "auto"  },
   { key: "owner",    label: "任务负责人",   width: 130,               mode: "auto"  },
-  { key: "due",      label: "截止时间",     width: 150,               mode: "auto"  },  // 仅「延期任务」视图显示
-  { key: "overdue",  label: "逾期天数",     width: 90,                mode: "auto"  },  // 仅「延期任务」视图显示
+  { key: "due",      label: "截止时间",     width: 150,               mode: "auto"  },  // 普通看板 + 延期视图均显示（可在列设置关闭）
+  { key: "overdue",  label: "逾期天数",     width: 90,                mode: "auto"  },  // 普通看板 + 延期视图均显示（可在列设置关闭）
   { key: "comments", label: "评论",        width: 490,               mode: "fixed" },
   { key: "updated",  label: "最近更新时间", width: 90,  endAnchor: true, mode: "auto" },
 ];
@@ -1502,11 +1502,12 @@ function loadColumnConfig(){
   for (const k of ["code", "title", "owner"]) {
     state.colModes[k] = "auto";
   }
-  // 强制中间顺序：code → title → owner → comments。owner 必须在 comments 前面（保持产品视角的阅读次序）：
-  // 编号 → 名称 → 谁负责 → 评论，逻辑递进。
+  // 强制中间顺序（保持产品视角的阅读次序）：
+  // 编号 → 名称 → 谁负责 → 描述 → 状态 → 开始时间 → 截止时间 → 逾期天数 → 评论，逻辑递进。
+  // due / overdue 现在与普通看板共享（不再仅限延期视图），默认可见、可在「列设置」里关掉。
   {
     const middle = state.colOrder.filter(k => k !== "proj" && k !== "updated");
-    const preferred = ["code", "title", "owner", "comments"];
+    const preferred = ["code", "title", "owner", "desc", "status", "start", "due", "overdue", "comments"];
     const seen = new Set();
     const ordered = [];
     for (const k of preferred){
@@ -1516,11 +1517,6 @@ function loadColumnConfig(){
       if (!seen.has(k)){ ordered.push(k); seen.add(k); }
     }
     state.colOrder = ["proj", ...ordered, "updated"];
-  }
-  // 截止时间 / 逾期天数 两列仅用于「延期任务」视图，绝不在普通看板出现
-  for (const k of ["due", "overdue"]){
-    state.colVisible[k] = false;
-    state.colOrder = state.colOrder.filter(x => x !== k);
   }
 }
 function saveColumnConfig(){
@@ -3793,15 +3789,10 @@ function onColModalMaskClick(e){
   if (e.target.id === "colModalMask") closeColumnSettings();
 }
 
-/** 重置列设置：清空所有用户改动，回 6 列全显 + 默认顺序 + 默认宽度 + 默认模式。 */
+/** 重置列设置：清空所有用户改动，回全部列显 + 默认顺序 + 默认宽度 + 默认模式。 */
 function resetColumnSettings(){
   state.colOrder = [...DEFAULT_COL_ORDER];
   for (const c of COLS_META) state.colVisible[c.key] = true;
-  // 截止时间 / 逾期天数 仅延期视图用，重置主看板时不能让它们混进来
-  for (const k of ["due", "overdue"]){
-    state.colVisible[k] = false;
-    state.colOrder = state.colOrder.filter(x => x !== k);
-  }
   state.colModes = { ...DEFAULT_COL_MODES };
   state.colModes["proj"] = "fixed";   // 锚定列永远固定
   state.colWidths = {};
